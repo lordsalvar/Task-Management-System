@@ -1,8 +1,17 @@
+import { Navigate } from "react-router-dom"
 import { LoginForm } from "@/components/login-form"
 import { Target } from "lucide-react"
 import { Link } from "react-router-dom"
+import { useAuth } from "@/contexts/AuthContext"
 
 export function Login() {
+  const { user, loading } = useAuth()
+
+  // Redirect to dashboard if already logged in
+  if (!loading && user) {
+    return <Navigate to="/dashboard" replace />
+  }
+
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
       <div className="w-full max-w-md">

@@ -2,11 +2,21 @@ import { CheckCircle2, TrendingUp, Clock, BarChart3, History, Target } from "luc
 import { Button } from "./components/ui/button"
 import { Routes, Route, Link } from "react-router-dom"
 import { Login } from "./pages/Login"
+import { Dashboard } from "./pages/Dashboard"
+import { ProtectedRoute } from "./components/ProtectedRoute"
 
 function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route
+        path="/dashboard"
+        element={
+          <ProtectedRoute>
+            <Dashboard />
+          </ProtectedRoute>
+        }
+      />
       <Route path="/" element={
         <div className="min-h-screen bg-background">
           {/* Navigation */}
