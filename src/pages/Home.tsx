@@ -11,7 +11,7 @@ export function Home() {
           <div className="flex h-16 items-center justify-between">
             <Link to="/" className="flex items-center gap-2">
               <Target className="h-6 w-6 text-primary" />
-              <span className="text-xl font-bold">TaskFlow</span>
+              <span className="text-xl font-bold">Task Management System</span>
             </Link>
             <div className="flex items-center gap-4">
               <Button variant="ghost" asChild>
@@ -147,7 +147,7 @@ export function Home() {
           <div className="mx-auto max-w-4xl">
             <div className="text-center">
               <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
-                Why Choose TaskFlow?
+                Why Choose Task Management System?
               </h2>
               <p className="mt-4 text-lg text-muted-foreground">
                 A comprehensive solution for modern task management
@@ -196,7 +196,7 @@ export function Home() {
             </h2>
             <p className="mt-4 text-lg text-muted-foreground">
               Start managing your tasks more effectively today. Join thousands of users 
-              who are already improving their productivity with TaskFlow.
+              who are already improving their productivity with Task Management System.
             </p>
             <div className="mt-10">
               <Button size="lg" className="text-base" asChild>
@@ -213,10 +213,10 @@ export function Home() {
           <div className="flex flex-col items-center justify-between gap-4 sm:flex-row">
             <div className="flex items-center gap-2">
               <Target className="h-5 w-5 text-primary" />
-              <span className="font-semibold">TaskFlow</span>
+              <span className="font-semibold">Task Management System</span>
             </div>
             <p className="text-sm text-muted-foreground">
-              © 2024 TaskFlow. All rights reserved.
+              © 2024 Task Management System. All rights reserved.
             </p>
           </div>
         </div>
