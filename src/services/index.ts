@@ -13,6 +13,9 @@ export { taskService } from './task-service'
 export { analyticsService } from './analytics-service'
 export { notificationService } from './notification-service'
 
+// Page Cache
+export { pageCache, CACHE_KEYS } from './page-cache'
+
 // Types
 export type * from './types'
 export type * from './user-service'

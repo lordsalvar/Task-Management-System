@@ -7,6 +7,7 @@ import { analyticsService } from "@/services"
 import { syncUserToDimUser } from "@/lib/db-helpers"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts"
+import { pageCache, CACHE_KEYS } from "@/services/page-cache"
 
 export function Analytics() {
   const { user } = useAuth()
@@ -47,6 +48,19 @@ export function Analytics() {
   }
 
   const loadAnalytics = async () => {
+    // Check cache first for all three metrics
+    const cachedDayOfWeek = pageCache.get<typeof dayOfWeekData>(CACHE_KEYS.ANALYTICS_DAY_OF_WEEK)
+    const cachedOnTime = pageCache.get<typeof onTimeStats>(CACHE_KEYS.ANALYTICS_ON_TIME)
+    const cachedCategoryTime = pageCache.get<typeof categoryTimeData>(CACHE_KEYS.ANALYTICS_CATEGORY_TIME)
+
+    if (cachedDayOfWeek && cachedOnTime && cachedCategoryTime) {
+      setDayOfWeekData(cachedDayOfWeek)
+      setOnTimeStats(cachedOnTime)
+      setCategoryTimeData(cachedCategoryTime)
+      setLoading(false)
+      return
+    }
+
     try {
       setLoading(true)
 
@@ -59,20 +73,23 @@ export function Analytics() {
 
       if (dayOfWeekResponse.success && dayOfWeekResponse.data) {
         setDayOfWeekData(dayOfWeekResponse.data)
+        // Cache for 3 minutes (analytics don't change too frequently)
+        pageCache.set(CACHE_KEYS.ANALYTICS_DAY_OF_WEEK, dayOfWeekResponse.data, 3 * 60 * 1000)
       }
 
       if (onTimeResponse.success && onTimeResponse.data) {
         setOnTimeStats(onTimeResponse.data)
+        pageCache.set(CACHE_KEYS.ANALYTICS_ON_TIME, onTimeResponse.data, 3 * 60 * 1000)
       }
 
       if (categoryTimeResponse.success && categoryTimeResponse.data) {
-        setCategoryTimeData(
-          categoryTimeResponse.data.map(cat => ({
-            category_name: cat.category_name,
-            avg_completion_days: cat.avg_completion_days,
-            task_count: cat.task_count,
-          }))
-        )
+        const categoryData = categoryTimeResponse.data.map(cat => ({
+          category_name: cat.category_name,
+          avg_completion_days: cat.avg_completion_days,
+          task_count: cat.task_count,
+        }))
+        setCategoryTimeData(categoryData)
+        pageCache.set(CACHE_KEYS.ANALYTICS_CATEGORY_TIME, categoryData, 3 * 60 * 1000)
       }
     } catch (error) {
       console.error("Failed to load analytics:", error)

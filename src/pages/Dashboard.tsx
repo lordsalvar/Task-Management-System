@@ -6,6 +6,7 @@ import { analyticsService } from "@/services"
 import { syncUserToDimUser } from "@/lib/db-helpers"
 import { AppLayout } from "@/components/AppLayout"
 import { Skeleton } from "@/components/ui/skeleton"
+import { pageCache, CACHE_KEYS } from "@/services/page-cache"
 
 export function Dashboard() {
   const { user } = useAuth()
@@ -41,17 +42,28 @@ export function Dashboard() {
   }
 
   const loadStats = async () => {
+    // Check cache first
+    const cached = pageCache.get<typeof stats>(CACHE_KEYS.DASHBOARD_STATS)
+    if (cached) {
+      setStats(cached)
+      setLoading(false)
+      return
+    }
+
     try {
       setLoading(true)
       const response = await analyticsService.getCompletionStats()
       if (response.success && response.data) {
-        setStats({
+        const statsData = {
           total: response.data.total_tasks,
           completed: response.data.completed_tasks,
           pending: response.data.pending_tasks,
           inProgress: response.data.in_progress_tasks,
           completionRate: response.data.completion_rate,
-        })
+        }
+        setStats(statsData)
+        // Cache for 2 minutes (stats can change frequently)
+        pageCache.set(CACHE_KEYS.DASHBOARD_STATS, statsData, 2 * 60 * 1000)
       }
     } catch (error) {
       console.error("Failed to load stats:", error)

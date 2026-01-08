@@ -24,6 +24,7 @@ import type { TaskWithRelations } from "@/services"
 import { AppLayout } from "@/components/AppLayout"
 import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
+import { pageCache, CACHE_KEYS } from "@/services/page-cache"
 
 export function Tasks() {
   const { user } = useAuth()
@@ -72,11 +73,21 @@ export function Tasks() {
   }
 
   const loadTasks = async () => {
+    // Check cache first
+    const cached = pageCache.get<TaskWithRelations[]>(CACHE_KEYS.TASKS_LIST)
+    if (cached) {
+      setTasks(cached)
+      setLoading(false)
+      return
+    }
+
     try {
       setLoading(true)
       const response = await taskService.getTasks({}, { page: 1, limit: 50 })
       if (response.success && response.data) {
         setTasks(response.data.items)
+        // Cache for 1 minute (tasks can change frequently)
+        pageCache.set(CACHE_KEYS.TASKS_LIST, response.data.items, 60 * 1000)
       }
     } catch (error) {
       console.error("Failed to load tasks:", error)
@@ -86,6 +97,13 @@ export function Tasks() {
   }
 
   const loadCategories = async () => {
+    // Check cache first
+    const cached = pageCache.get<typeof categories>(CACHE_KEYS.TASKS_CATEGORIES)
+    if (cached) {
+      setCategories(cached)
+      return
+    }
+
     try {
       const { data, error } = await supabase
         .from('dim_category')
@@ -93,13 +111,23 @@ export function Tasks() {
         .order('category_name')
 
       if (error) throw error
-      setCategories(data || [])
+      const categoriesData = data || []
+      setCategories(categoriesData)
+      // Cache for 5 minutes (categories don't change often)
+      pageCache.set(CACHE_KEYS.TASKS_CATEGORIES, categoriesData, 5 * 60 * 1000)
     } catch (error) {
       console.error("Failed to load categories:", error)
     }
   }
 
   const loadStatuses = async () => {
+    // Check cache first
+    const cached = pageCache.get<typeof statuses>(CACHE_KEYS.TASKS_STATUSES)
+    if (cached) {
+      setStatuses(cached)
+      return
+    }
+
     try {
       const { data, error } = await supabase
         .from('dim_status')
@@ -107,7 +135,10 @@ export function Tasks() {
         .order('status_order')
 
       if (error) throw error
-      setStatuses(data || [])
+      const statusesData = data || []
+      setStatuses(statusesData)
+      // Cache for 10 minutes (statuses rarely change)
+      pageCache.set(CACHE_KEYS.TASKS_STATUSES, statusesData, 10 * 60 * 1000)
     } catch (error) {
       console.error("Failed to load statuses:", error)
     }
@@ -139,6 +170,14 @@ export function Tasks() {
       })
 
       if (response.success) {
+        // Invalidate caches since we created a new task
+        pageCache.clear(CACHE_KEYS.TASKS_LIST)
+        pageCache.clear(CACHE_KEYS.DASHBOARD_STATS)
+        // Analytics also need to be refreshed
+        pageCache.clear(CACHE_KEYS.ANALYTICS_DAY_OF_WEEK)
+        pageCache.clear(CACHE_KEYS.ANALYTICS_ON_TIME)
+        pageCache.clear(CACHE_KEYS.ANALYTICS_CATEGORY_TIME)
+        
         setNewTaskTitle("")
         setNewTaskDescription("")
         setNewTaskPriority(undefined)
@@ -210,8 +249,9 @@ export function Tasks() {
 
       if (error) throw error
 
-      // Clear task service cache since we added a new category
+      // Clear caches since we added a new category
       taskService.clearCaches()
+      pageCache.clear(CACHE_KEYS.TASKS_CATEGORIES)
       await loadCategories()
       setNewTaskCategory(data.category_id)
       
@@ -241,6 +281,13 @@ export function Tasks() {
       await taskService.updateTask(task.task_id, {
         is_completed: !task.is_completed,
       })
+      // Invalidate caches since task was updated
+      pageCache.clear(CACHE_KEYS.TASKS_LIST)
+      pageCache.clear(CACHE_KEYS.DASHBOARD_STATS)
+      pageCache.clear(CACHE_KEYS.ANALYTICS_DAY_OF_WEEK)
+      pageCache.clear(CACHE_KEYS.ANALYTICS_ON_TIME)
+      pageCache.clear(CACHE_KEYS.ANALYTICS_CATEGORY_TIME)
+      
       toast.success(
         task.is_completed ? "Task marked as incomplete" : "Task completed!",
         {
@@ -261,6 +308,10 @@ export function Tasks() {
   const handleDeleteTask = async (taskId: string) => {
     try {
       await taskService.deleteTask(taskId)
+      // Invalidate caches since task was deleted
+      pageCache.clear(CACHE_KEYS.TASKS_LIST)
+      pageCache.clear(CACHE_KEYS.DASHBOARD_STATS)
+      
       toast.success("Task deleted", {
         description: "The task has been removed.",
       })
