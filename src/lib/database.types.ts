@@ -236,6 +236,77 @@ export type Database = {
           },
         ]
       }
+      task_logs: {
+        Row: {
+          log_id: string
+          task_id: string
+          user_id: string
+          change_type: string
+          field_name: string | null
+          old_value: string | null
+          new_value: string | null
+          completed_at: string | null
+          completed_date_id: number | null
+          log_date_id: number
+          created_at: string
+        }
+        Insert: {
+          log_id?: string
+          task_id: string
+          user_id: string
+          change_type: string
+          field_name?: string | null
+          old_value?: string | null
+          new_value?: string | null
+          completed_at?: string | null
+          completed_date_id?: number | null
+          log_date_id: number
+          created_at?: string
+        }
+        Update: {
+          log_id?: string
+          task_id?: string
+          user_id?: string
+          change_type?: string
+          field_name?: string | null
+          old_value?: string | null
+          new_value?: string | null
+          completed_at?: string | null
+          completed_date_id?: number | null
+          log_date_id?: number
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_logs_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "fact_tasks"
+            referencedColumns: ["task_id"]
+          },
+          {
+            foreignKeyName: "task_logs_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "dim_user"
+            referencedColumns: ["user_id"]
+          },
+          {
+            foreignKeyName: "task_logs_log_date_id_fkey"
+            columns: ["log_date_id"]
+            isOneToOne: false
+            referencedRelation: "dim_date"
+            referencedColumns: ["date_id"]
+          },
+          {
+            foreignKeyName: "task_logs_completed_date_id_fkey"
+            columns: ["completed_date_id"]
+            isOneToOne: false
+            referencedRelation: "dim_date"
+            referencedColumns: ["date_id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never

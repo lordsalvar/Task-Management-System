@@ -167,9 +167,26 @@ class AnalyticsService {
 
       if (error) throw error
 
+      // Get completion logs for more accurate completion tracking
+      const { data: completionLogs } = await supabase
+        .from('task_logs')
+        .select(`
+          completed_at,
+          completed_date_id,
+          log_date_id,
+          dim_date!task_logs_completed_date_id_fkey(date, year, month, week),
+          dim_date!task_logs_log_date_id_fkey(date)
+        `)
+        .eq('user_id', dimUser.user_id)
+        .in('change_type', ['completed', 'date_changed'])
+        .not('completed_at', 'is', null)
+        .gte('created_at', startDate)
+        .lte('created_at', endDate)
+
       // Group by date based on granularity
       const grouped = new Map<string, { created: number; completed: number; in_progress: number }>()
 
+      // Process task creations
       tasks?.forEach(task => {
         const createdDate = (task.dim_date as any)?.date || ''
         let key = createdDate
@@ -191,11 +208,33 @@ class AnalyticsService {
         const stats = grouped.get(key)!
         stats.created++
 
-        if (task.is_completed) {
-          stats.completed++
-        } else if (task.status_id === 2) {
+        if (task.status_id === 2) {
           stats.in_progress++
         }
+      })
+
+      // Process completion logs - use logs for accurate completion dates
+      completionLogs?.forEach(log => {
+        const completedDate = (log.dim_date as any)?.date || ''
+        if (!completedDate) return
+
+        let key = completedDate
+
+        if (granularity === 'week') {
+          const date = new Date(completedDate)
+          const week = this.getWeekNumber(date)
+          key = `${date.getFullYear()}-W${week.toString().padStart(2, '0')}`
+        } else if (granularity === 'month') {
+          const date = new Date(completedDate)
+          key = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`
+        }
+
+        if (!grouped.has(key)) {
+          grouped.set(key, { created: 0, completed: 0, in_progress: 0 })
+        }
+
+        const stats = grouped.get(key)!
+        stats.completed++
       })
 
       const timeSeries: TimeSeriesData[] = Array.from(grouped.entries())
@@ -380,13 +419,7 @@ class AnalyticsService {
           time_series: timeSeries.data!,
           category_stats: categoryStats.data!,
           priority_stats: priorityStats.data!,
-          productivity_metrics: {
-            tasks_per_day: 0,
-            avg_completion_time_hours: null,
-            most_productive_day: '',
-            most_productive_month: '',
-            peak_hours: [],
-          }, // TODO: Implement productivity metrics
+          productivity_metrics: await this.calculateProductivityMetrics(startDate, endDate),
         },
         timestamp: new Date().toISOString(),
       }
@@ -396,6 +429,191 @@ class AnalyticsService {
         error: {
           code: 'ANALYTICS_ERROR',
           message: error instanceof Error ? error.message : 'Failed to generate analytics report',
+        },
+        timestamp: new Date().toISOString(),
+      }
+    }
+  }
+
+  /**
+   * Calculate productivity metrics using task logs
+   */
+  private async calculateProductivityMetrics(
+    startDate: string,
+    endDate: string
+  ): Promise<ProductivityMetrics> {
+    try {
+      const dimUser = await getCurrentUserDimUser()
+      if (!dimUser) {
+        return {
+          tasks_per_day: 0,
+          avg_completion_time_hours: null,
+          most_productive_day: '',
+          most_productive_month: '',
+          peak_hours: [],
+        }
+      }
+
+      // Get tasks with creation and completion dates
+      const { data: tasks } = await supabase
+        .from('fact_tasks')
+        .select('task_id, created_at, completed_at, actual_hours')
+        .eq('user_id', dimUser.user_id)
+        .gte('created_at', startDate)
+        .lte('created_at', endDate)
+        .not('completed_at', 'is', null)
+
+      // Get completion logs for accurate completion times
+      const { data: completionLogs } = await supabase
+        .from('task_logs')
+        .select('task_id, completed_at, log_date_id, dim_date!task_logs_completed_date_id_fkey(day_name, month_name)')
+        .eq('user_id', dimUser.user_id)
+        .in('change_type', ['completed', 'date_changed'])
+        .not('completed_at', 'is', null)
+        .gte('created_at', startDate)
+        .lte('created_at', endDate)
+
+      if (!tasks || !completionLogs) {
+        return {
+          tasks_per_day: 0,
+          avg_completion_time_hours: null,
+          most_productive_day: '',
+          most_productive_month: '',
+          peak_hours: [],
+        }
+      }
+
+      // Calculate tasks per day
+      const daysDiff = Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)) || 1
+      const tasksPerDay = tasks.length / daysDiff
+
+      // Calculate average completion time
+      const completionTimes: number[] = []
+      tasks.forEach(task => {
+        if (task.completed_at && task.created_at) {
+          const created = new Date(task.created_at).getTime()
+          const completed = new Date(task.completed_at).getTime()
+          const hours = (completed - created) / (1000 * 60 * 60)
+          if (hours > 0) {
+            completionTimes.push(hours)
+          }
+        }
+      })
+      const avgCompletionTime = completionTimes.length > 0
+        ? completionTimes.reduce((a, b) => a + b, 0) / completionTimes.length
+        : null
+
+      // Find most productive day and month from completion logs
+      const dayCounts = new Map<string, number>()
+      const monthCounts = new Map<string, number>()
+
+      completionLogs.forEach(log => {
+        const dateInfo = (log.dim_date as any)
+        if (dateInfo) {
+          const dayName = dateInfo.day_name || ''
+          const monthName = dateInfo.month_name || ''
+          
+          if (dayName) {
+            dayCounts.set(dayName, (dayCounts.get(dayName) || 0) + 1)
+          }
+          if (monthName) {
+            monthCounts.set(monthName, (monthCounts.get(monthName) || 0) + 1)
+          }
+        }
+      })
+
+      const mostProductiveDay = Array.from(dayCounts.entries())
+        .sort((a, b) => b[1] - a[1])[0]?.[0] || ''
+      const mostProductiveMonth = Array.from(monthCounts.entries())
+        .sort((a, b) => b[1] - a[1])[0]?.[0] || ''
+
+      // Extract peak hours from completion times
+      const hourCounts = new Map<number, number>()
+      completionLogs.forEach(log => {
+        if (log.completed_at) {
+          const hour = new Date(log.completed_at).getHours()
+          hourCounts.set(hour, (hourCounts.get(hour) || 0) + 1)
+        }
+      })
+      const peakHours = Array.from(hourCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([hour]) => hour)
+
+      return {
+        tasks_per_day: Math.round(tasksPerDay * 100) / 100,
+        avg_completion_time_hours: avgCompletionTime ? Math.round(avgCompletionTime * 100) / 100 : null,
+        most_productive_day: mostProductiveDay,
+        most_productive_month: mostProductiveMonth,
+        peak_hours: peakHours,
+      }
+    } catch (error) {
+      console.error('Error calculating productivity metrics:', error)
+      return {
+        tasks_per_day: 0,
+        avg_completion_time_hours: null,
+        most_productive_day: '',
+        most_productive_month: '',
+        peak_hours: [],
+      }
+    }
+  }
+
+  /**
+   * Get task completion logs for analytics
+   * This provides accurate completion dates from logs
+   */
+  async getCompletionLogs(
+    startDate?: string,
+    endDate?: string
+  ): Promise<ApiResponse<Array<{
+    task_id: string
+    completed_at: string
+    completed_date_id: number
+    log_date_id: number
+  }>>> {
+    try {
+      const dimUser = await getCurrentUserDimUser()
+      if (!dimUser) {
+        throw new Error('User not found')
+      }
+
+      let query = supabase
+        .from('task_logs')
+        .select('task_id, completed_at, completed_date_id, log_date_id')
+        .eq('user_id', dimUser.user_id)
+        .in('change_type', ['completed', 'date_changed'])
+        .not('completed_at', 'is', null)
+        .not('completed_date_id', 'is', null)
+
+      if (startDate) {
+        query = query.gte('created_at', startDate)
+      }
+      if (endDate) {
+        query = query.lte('created_at', endDate)
+      }
+
+      const { data, error } = await query.order('completed_at', { ascending: false })
+
+      if (error) throw error
+
+      // Filter out any null values (shouldn't happen due to .not() filters, but TypeScript needs this)
+      const filteredData = (data || []).filter(
+        (log): log is { task_id: string; completed_at: string; completed_date_id: number; log_date_id: number } =>
+          log.completed_at !== null && log.completed_date_id !== null
+      )
+
+      return {
+        success: true,
+        data: filteredData,
+        timestamp: new Date().toISOString(),
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'ANALYTICS_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to get completion logs',
         },
         timestamp: new Date().toISOString(),
       }
