@@ -1,5 +1,6 @@
 import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { NotificationBell } from "@/components/notification-bell"
 
 interface SiteHeaderProps {
   pageTitle?: string
@@ -14,7 +15,8 @@ export function SiteHeader({ pageTitle = "Tasks" }: SiteHeaderProps) {
           orientation="vertical"
           className="mx-2 data-[orientation=vertical]:h-4"
         />
-        <h1 className="text-base font-medium">{pageTitle}</h1>
+        <h1 className="text-base font-medium flex-1">{pageTitle}</h1>
+        <NotificationBell />
       </div>
     </header>
   )

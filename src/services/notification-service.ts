@@ -182,13 +182,22 @@ class NotificationService {
     }
 
     try {
-      // In a real implementation, this would:
-      // 1. Create a notification record
-      // 2. Send email/push notification based on user preferences
-      // 3. Log the notification
+      // Get task details
+      const { data: task, error: taskError } = await supabase
+        .from('fact_tasks')
+        .select('task_title')
+        .eq('task_id', taskId)
+        .single()
 
-      // For now, we'll just log it
-      console.log(`Sending ${reminderType} reminder for task ${taskId}`)
+      if (taskError) throw taskError
+
+      const title = reminderType === 'overdue' ? 'Task Overdue' : 'Task Due Soon'
+      const message = reminderType === 'overdue'
+        ? `"${task.task_title}" is overdue`
+        : `"${task.task_title}" is due soon`
+
+      // Create notification
+      await this.createNotification(taskId, reminderType, title, message)
 
       return {
         success: true,
@@ -292,7 +301,7 @@ class NotificationService {
    * Get all notifications for the user
    */
   async getNotifications(
-    _unreadOnly: boolean = false
+    unreadOnly: boolean = false
   ): Promise<ApiResponse<Notification[]>> {
     const response = await apiGateway.route<Notification[]>('NOTIFICATION', '/notifications', {
       method: 'GET',
@@ -304,11 +313,28 @@ class NotificationService {
     }
 
     try {
-      // In a real implementation, this would fetch from a notifications table
-      // For now, return empty array
+      const dimUser = await getCurrentUserDimUser()
+      if (!dimUser) {
+        throw new Error('User not found')
+      }
+
+      let query = supabase
+        .from('notifications')
+        .select('*')
+        .eq('user_id', dimUser.user_id)
+        .order('created_at', { ascending: false })
+
+      if (unreadOnly) {
+        query = query.eq('is_read', false)
+      }
+
+      const { data, error } = await query
+
+      if (error) throw error
+
       return {
         success: true,
-        data: [],
+        data: (data || []) as Notification[],
         timestamp: new Date().toISOString(),
       }
     } catch (error) {
@@ -337,7 +363,19 @@ class NotificationService {
     }
 
     try {
-      // In a real implementation, this would update the notification record
+      const dimUser = await getCurrentUserDimUser()
+      if (!dimUser) {
+        throw new Error('User not found')
+      }
+
+      const { error } = await supabase
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('notification_id', notificationId)
+        .eq('user_id', dimUser.user_id)
+
+      if (error) throw error
+
       return {
         success: true,
         data: undefined,
@@ -349,6 +387,198 @@ class NotificationService {
         error: {
           code: 'NOTIFICATION_ERROR',
           message: error instanceof Error ? error.message : 'Failed to mark as read',
+        },
+        timestamp: new Date().toISOString(),
+      }
+    }
+  }
+
+  /**
+   * Create a notification
+   */
+  async createNotification(
+    taskId: string | null,
+    type: 'reminder' | 'overdue' | 'upcoming' | 'completed',
+    title: string,
+    message: string
+  ): Promise<ApiResponse<Notification>> {
+    try {
+      const dimUser = await getCurrentUserDimUser()
+      if (!dimUser) {
+        throw new Error('User not found')
+      }
+
+      const { data, error } = await supabase
+        .from('notifications')
+        .insert({
+          user_id: dimUser.user_id,
+          task_id: taskId,
+          type,
+          title,
+          message,
+          is_read: false,
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+
+      return {
+        success: true,
+        data: data as Notification,
+        timestamp: new Date().toISOString(),
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'NOTIFICATION_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to create notification',
+        },
+        timestamp: new Date().toISOString(),
+      }
+    }
+  }
+
+  /**
+   * Check for upcoming and overdue tasks and create notifications
+   * This should be called periodically or on app load
+   */
+  async checkAndCreateNotifications(): Promise<ApiResponse<{ created: number }>> {
+    try {
+      const dimUser = await getCurrentUserDimUser()
+      if (!dimUser) {
+        throw new Error('User not found')
+      }
+
+      const now = new Date()
+      const oneDayFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000)
+
+      // Get tasks that are not completed
+      const { data: tasks, error: tasksError } = await supabase
+        .from('fact_tasks')
+        .select('task_id, task_title, created_at, is_completed, estimated_hours')
+        .eq('user_id', dimUser.user_id)
+        .eq('is_completed', false)
+
+      if (tasksError) throw tasksError
+
+      if (!tasks || tasks.length === 0) {
+        return {
+          success: true,
+          data: { created: 0 },
+          timestamp: new Date().toISOString(),
+        }
+      }
+
+      // Check for existing notifications in the last 24 hours to avoid duplicates
+      const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+      const { data: recentNotifications } = await supabase
+        .from('notifications')
+        .select('task_id, type')
+        .eq('user_id', dimUser.user_id)
+        .gte('created_at', yesterday.toISOString())
+        .in('type', ['upcoming', 'overdue'])
+
+      const recentNotificationKeys = new Set(
+        (recentNotifications || []).map(n => `${n.task_id}-${n.type}`)
+      )
+
+      let createdCount = 0
+
+      // Check each task and create notifications if needed
+      for (const task of tasks) {
+        // Calculate due date: use created_at + estimated_hours, or created_at + 7 days as default
+        const createdDate = new Date(task.created_at)
+        let dueDate = new Date(createdDate)
+        
+        if (task.estimated_hours) {
+          dueDate = new Date(createdDate.getTime() + task.estimated_hours * 60 * 60 * 1000)
+        } else {
+          // Default: 7 days from creation
+          dueDate = new Date(createdDate.getTime() + 7 * 24 * 60 * 60 * 1000)
+        }
+
+        const daysUntilDue = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+        const isOverdue = daysUntilDue < 0
+        const isUpcoming = daysUntilDue >= 0 && daysUntilDue <= 1
+
+        // Create overdue notification
+        if (isOverdue) {
+          const notificationKey = `${task.task_id}-overdue`
+          if (!recentNotificationKeys.has(notificationKey)) {
+            await this.createNotification(
+              task.task_id,
+              'overdue',
+              'Task Overdue',
+              `"${task.task_title}" is ${Math.abs(daysUntilDue)} day(s) overdue`
+            )
+            createdCount++
+            recentNotificationKeys.add(notificationKey)
+          }
+        }
+        // Create upcoming notification (due within 24 hours)
+        else if (isUpcoming) {
+          const notificationKey = `${task.task_id}-upcoming`
+          if (!recentNotificationKeys.has(notificationKey)) {
+            await this.createNotification(
+              task.task_id,
+              'upcoming',
+              'Task Due Soon',
+              `"${task.task_title}" is due ${daysUntilDue === 0 ? 'today' : `in ${daysUntilDue} day(s)`}`
+            )
+            createdCount++
+            recentNotificationKeys.add(notificationKey)
+          }
+        }
+      }
+
+      return {
+        success: true,
+        data: { created: createdCount },
+        timestamp: new Date().toISOString(),
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'NOTIFICATION_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to check and create notifications',
+        },
+        timestamp: new Date().toISOString(),
+      }
+    }
+  }
+
+  /**
+   * Mark all notifications as read
+   */
+  async markAllAsRead(): Promise<ApiResponse<void>> {
+    try {
+      const dimUser = await getCurrentUserDimUser()
+      if (!dimUser) {
+        throw new Error('User not found')
+      }
+
+      const { error } = await supabase
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('user_id', dimUser.user_id)
+        .eq('is_read', false)
+
+      if (error) throw error
+
+      return {
+        success: true,
+        data: undefined,
+        timestamp: new Date().toISOString(),
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'NOTIFICATION_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to mark all as read',
         },
         timestamp: new Date().toISOString(),
       }
