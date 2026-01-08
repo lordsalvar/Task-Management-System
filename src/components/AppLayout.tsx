@@ -1,4 +1,4 @@
-import { ReactNode } from "react"
+import type { ReactNode } from "react"
 import { useAuth } from "@/contexts/AuthContext"
 import { useNavigate, useLocation } from "react-router-dom"
 import { AppSidebar } from "@/components/app-sidebar"

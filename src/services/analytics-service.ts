@@ -60,6 +60,27 @@ export interface AnalyticsReport {
   productivity_metrics: ProductivityMetrics
 }
 
+export interface DayOfWeekCompletion {
+  day_name: string
+  day_of_week: number
+  completed_count: number
+}
+
+export interface OnTimeCompletionStats {
+  total_completed: number
+  on_time_count: number
+  late_count: number
+  on_time_percentage: number
+}
+
+export interface CategoryCompletionTime {
+  category_id: number
+  category_name: string
+  avg_completion_hours: number | null
+  avg_completion_days: number | null
+  task_count: number
+}
+
 class AnalyticsService {
   /**
    * Get task completion statistics
@@ -614,6 +635,305 @@ class AnalyticsService {
         error: {
           code: 'ANALYTICS_ERROR',
           message: error instanceof Error ? error.message : 'Failed to get completion logs',
+        },
+        timestamp: new Date().toISOString(),
+      }
+    }
+  }
+
+  /**
+   * Get completion statistics by day of week
+   * Business Question 1: Which days of the week have the highest number of completed tasks?
+   */
+  async getCompletionByDayOfWeek(
+    startDate?: string,
+    endDate?: string
+  ): Promise<ApiResponse<DayOfWeekCompletion[]>> {
+    try {
+      const dimUser = await getCurrentUserDimUser()
+      if (!dimUser) {
+        throw new Error('User not found')
+      }
+
+      // Get completion logs with date information
+      let query = supabase
+        .from('task_logs')
+        .select(`
+          completed_date_id,
+          dim_date!task_logs_completed_date_id_fkey(day_name, day_of_week)
+        `)
+        .eq('user_id', dimUser.user_id)
+        .in('change_type', ['completed', 'date_changed'])
+        .not('completed_at', 'is', null)
+        .not('completed_date_id', 'is', null)
+
+      if (startDate) {
+        query = query.gte('created_at', startDate)
+      }
+      if (endDate) {
+        query = query.lte('created_at', endDate)
+      }
+
+      const { data: logs, error } = await query
+
+      if (error) throw error
+
+      // Group by day of week
+      const dayCounts = new Map<string, { day_name: string; day_of_week: number; count: number }>()
+
+      logs?.forEach(log => {
+        const dateInfo = (log.dim_date as any)
+        if (dateInfo && dateInfo.day_name) {
+          const dayName = dateInfo.day_name
+          const dayOfWeek = dateInfo.day_of_week
+
+          if (!dayCounts.has(dayName)) {
+            dayCounts.set(dayName, {
+              day_name: dayName,
+              day_of_week: dayOfWeek,
+              count: 0,
+            })
+          }
+
+          const dayData = dayCounts.get(dayName)!
+          dayData.count++
+        }
+      })
+
+      // Convert to array and sort by day of week (Monday = 1, Sunday = 7)
+      const result: DayOfWeekCompletion[] = Array.from(dayCounts.values())
+        .map(day => ({
+          day_name: day.day_name,
+          day_of_week: day.day_of_week,
+          completed_count: day.count,
+        }))
+        .sort((a, b) => a.day_of_week - b.day_of_week)
+
+      return {
+        success: true,
+        data: result,
+        timestamp: new Date().toISOString(),
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'ANALYTICS_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to get completion by day of week',
+        },
+        timestamp: new Date().toISOString(),
+      }
+    }
+  }
+
+  /**
+   * Get on-time completion percentage
+   * Business Question 2: What percentage of tasks are completed on or before their due dates?
+   * 
+   * Note: Since due_date is not yet in the database schema, we'll use created_at + estimated_hours
+   * as a proxy for due date, or we can calculate based on average completion time.
+   * For now, we'll use a simple approach: tasks completed within estimated time or within 7 days of creation.
+   */
+  async getOnTimeCompletionStats(
+    startDate?: string,
+    endDate?: string
+  ): Promise<ApiResponse<OnTimeCompletionStats>> {
+    try {
+      const dimUser = await getCurrentUserDimUser()
+      if (!dimUser) {
+        throw new Error('User not found')
+      }
+
+      // Get completed tasks with creation and completion dates
+      let query = supabase
+        .from('fact_tasks')
+        .select('task_id, created_at, completed_at, estimated_hours, actual_hours')
+        .eq('user_id', dimUser.user_id)
+        .eq('is_completed', true)
+        .not('completed_at', 'is', null)
+
+      if (startDate) {
+        query = query.gte('created_at', startDate)
+      }
+      if (endDate) {
+        query = query.lte('created_at', endDate)
+      }
+
+      const { data: tasks, error } = await query
+
+      if (error) throw error
+
+      if (!tasks || tasks.length === 0) {
+        return {
+          success: true,
+          data: {
+            total_completed: 0,
+            on_time_count: 0,
+            late_count: 0,
+            on_time_percentage: 0,
+          },
+          timestamp: new Date().toISOString(),
+        }
+      }
+
+      let onTimeCount = 0
+      let lateCount = 0
+
+      tasks.forEach(task => {
+        if (!task.completed_at || !task.created_at) return
+
+        const created = new Date(task.created_at)
+        const completed = new Date(task.completed_at)
+        const completionTimeHours = (completed.getTime() - created.getTime()) / (1000 * 60 * 60)
+
+        // Determine if task was completed on time
+        // If estimated_hours exists, use it; otherwise use 7 days as default
+        let expectedHours = 7 * 24 // Default: 7 days
+        if (task.estimated_hours) {
+          expectedHours = task.estimated_hours
+        }
+
+        if (completionTimeHours <= expectedHours) {
+          onTimeCount++
+        } else {
+          lateCount++
+        }
+      })
+
+      const totalCompleted = tasks.length
+      const onTimePercentage = totalCompleted > 0 ? (onTimeCount / totalCompleted) * 100 : 0
+
+      return {
+        success: true,
+        data: {
+          total_completed: totalCompleted,
+          on_time_count: onTimeCount,
+          late_count: lateCount,
+          on_time_percentage: Math.round(onTimePercentage * 100) / 100,
+        },
+        timestamp: new Date().toISOString(),
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'ANALYTICS_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to get on-time completion stats',
+        },
+        timestamp: new Date().toISOString(),
+      }
+    }
+  }
+
+  /**
+   * Get average completion time by category
+   * Business Question 3: Which task categories take the longest time to complete based on historical data?
+   */
+  async getCategoryCompletionTime(
+    startDate?: string,
+    endDate?: string
+  ): Promise<ApiResponse<CategoryCompletionTime[]>> {
+    try {
+      const dimUser = await getCurrentUserDimUser()
+      if (!dimUser) {
+        throw new Error('User not found')
+      }
+
+      // Get completed tasks with categories and completion times
+      let query = supabase
+        .from('fact_tasks')
+        .select('task_id, category_id, created_at, completed_at, actual_hours')
+        .eq('user_id', dimUser.user_id)
+        .eq('is_completed', true)
+        .not('completed_at', 'is', null)
+        .not('category_id', 'is', null)
+
+      if (startDate) {
+        query = query.gte('created_at', startDate)
+      }
+      if (endDate) {
+        query = query.lte('created_at', endDate)
+      }
+
+      const { data: tasks, error } = await query
+
+      if (error) throw error
+
+      if (!tasks || tasks.length === 0) {
+        return {
+          success: true,
+          data: [],
+          timestamp: new Date().toISOString(),
+        }
+      }
+
+      // Group by category
+      const categoryMap = new Map<number, {
+        completionTimes: number[]
+        taskCount: number
+      }>()
+
+      tasks.forEach(task => {
+        if (!task.category_id || !task.completed_at || !task.created_at) return
+
+        const created = new Date(task.created_at)
+        const completed = new Date(task.completed_at)
+        const completionTimeHours = (completed.getTime() - created.getTime()) / (1000 * 60 * 60)
+
+        if (!categoryMap.has(task.category_id)) {
+          categoryMap.set(task.category_id, {
+            completionTimes: [],
+            taskCount: 0,
+          })
+        }
+
+        const categoryData = categoryMap.get(task.category_id)!
+        categoryData.completionTimes.push(completionTimeHours)
+        categoryData.taskCount++
+      })
+
+      // Fetch category names
+      const categoryIds = Array.from(categoryMap.keys())
+      const { data: categories } = await supabase
+        .from('dim_category')
+        .select('category_id, category_name')
+        .in('category_id', categoryIds)
+
+      // Calculate averages and format results
+      const result: CategoryCompletionTime[] = Array.from(categoryMap.entries())
+        .map(([categoryId, data]) => {
+          const category = categories?.find(c => c.category_id === categoryId)
+          const avgHours = data.completionTimes.length > 0
+            ? data.completionTimes.reduce((a, b) => a + b, 0) / data.completionTimes.length
+            : null
+          const avgDays = avgHours ? avgHours / 24 : null
+
+          return {
+            category_id: categoryId,
+            category_name: category?.category_name || 'Unknown',
+            avg_completion_hours: avgHours ? Math.round(avgHours * 100) / 100 : null,
+            avg_completion_days: avgDays ? Math.round(avgDays * 100) / 100 : null,
+            task_count: data.taskCount,
+          }
+        })
+        .sort((a, b) => {
+          // Sort by average completion hours (longest first)
+          const aHours = a.avg_completion_hours || 0
+          const bHours = b.avg_completion_hours || 0
+          return bHours - aHours
+        })
+
+      return {
+        success: true,
+        data: result,
+        timestamp: new Date().toISOString(),
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'ANALYTICS_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to get category completion time',
         },
         timestamp: new Date().toISOString(),
       }
