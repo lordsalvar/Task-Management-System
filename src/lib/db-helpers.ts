@@ -159,6 +159,7 @@ export async function getStatusIdByName(statusName: string): Promise<number> {
 
 /**
  * Gets the current user's dim_user record
+ * Automatically syncs the user if they don't exist in dim_user
  */
 export async function getCurrentUserDimUser(): Promise<DimUser | null> {
   const { data: { user } } = await supabase.auth.getUser()
@@ -171,7 +172,29 @@ export async function getCurrentUserDimUser(): Promise<DimUser | null> {
     .single()
 
   if (error) {
-    if (error.code === 'PGRST116') return null // No rows returned
+    if (error.code === 'PGRST116') {
+      // User doesn't exist in dim_user, sync them
+      try {
+        const userId = await syncUserToDimUser(
+          user.id,
+          user.email || '',
+          user.user_metadata?.name
+        )
+        
+        // Fetch the newly created user
+        const { data: newUser, error: fetchError } = await supabase
+          .from('dim_user')
+          .select('*')
+          .eq('user_id', userId)
+          .single()
+        
+        if (fetchError) throw fetchError
+        return newUser
+      } catch (syncError) {
+        console.error('Failed to sync user to dim_user:', syncError)
+        return null
+      }
+    }
     throw error
   }
 

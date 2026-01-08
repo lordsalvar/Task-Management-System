@@ -236,47 +236,109 @@ export type Database = {
           },
         ]
       }
-      task_logs: {
+      notifications: {
         Row: {
-          log_id: string
-          task_id: string
-          user_id: string
-          change_type: string
-          field_name: string | null
-          old_value: string | null
-          new_value: string | null
-          completed_at: string | null
-          completed_date_id: number | null
-          log_date_id: number
           created_at: string
+          is_read: boolean
+          message: string
+          notification_id: string
+          task_id: string | null
+          title: string
+          type: string
+          user_id: string
         }
         Insert: {
-          log_id?: string
-          task_id: string
-          user_id: string
-          change_type: string
-          field_name?: string | null
-          old_value?: string | null
-          new_value?: string | null
-          completed_at?: string | null
-          completed_date_id?: number | null
-          log_date_id: number
           created_at?: string
+          is_read?: boolean
+          message: string
+          notification_id?: string
+          task_id?: string | null
+          title: string
+          type: string
+          user_id: string
         }
         Update: {
-          log_id?: string
-          task_id?: string
-          user_id?: string
-          change_type?: string
-          field_name?: string | null
-          old_value?: string | null
-          new_value?: string | null
-          completed_at?: string | null
-          completed_date_id?: number | null
-          log_date_id?: number
           created_at?: string
+          is_read?: boolean
+          message?: string
+          notification_id?: string
+          task_id?: string | null
+          title?: string
+          type?: string
+          user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "notifications_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "fact_tasks"
+            referencedColumns: ["task_id"]
+          },
+          {
+            foreignKeyName: "notifications_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "dim_user"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
+      task_logs: {
+        Row: {
+          change_type: string
+          completed_at: string | null
+          completed_date_id: number | null
+          created_at: string
+          field_name: string | null
+          log_date_id: number
+          log_id: string
+          new_value: string | null
+          old_value: string | null
+          task_id: string
+          user_id: string
+        }
+        Insert: {
+          change_type: string
+          completed_at?: string | null
+          completed_date_id?: number | null
+          created_at?: string
+          field_name?: string | null
+          log_date_id: number
+          log_id?: string
+          new_value?: string | null
+          old_value?: string | null
+          task_id: string
+          user_id: string
+        }
+        Update: {
+          change_type?: string
+          completed_at?: string | null
+          completed_date_id?: number | null
+          created_at?: string
+          field_name?: string | null
+          log_date_id?: number
+          log_id?: string
+          new_value?: string | null
+          old_value?: string | null
+          task_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_logs_completed_date_id_fkey"
+            columns: ["completed_date_id"]
+            isOneToOne: false
+            referencedRelation: "dim_date"
+            referencedColumns: ["date_id"]
+          },
+          {
+            foreignKeyName: "task_logs_log_date_id_fkey"
+            columns: ["log_date_id"]
+            isOneToOne: false
+            referencedRelation: "dim_date"
+            referencedColumns: ["date_id"]
+          },
           {
             foreignKeyName: "task_logs_task_id_fkey"
             columns: ["task_id"]
@@ -290,20 +352,6 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "dim_user"
             referencedColumns: ["user_id"]
-          },
-          {
-            foreignKeyName: "task_logs_log_date_id_fkey"
-            columns: ["log_date_id"]
-            isOneToOne: false
-            referencedRelation: "dim_date"
-            referencedColumns: ["date_id"]
-          },
-          {
-            foreignKeyName: "task_logs_completed_date_id_fkey"
-            columns: ["completed_date_id"]
-            isOneToOne: false
-            referencedRelation: "dim_date"
-            referencedColumns: ["date_id"]
           },
         ]
       }
@@ -448,4 +496,3 @@ export const Constants = {
     Enums: {},
   },
 } as const
-

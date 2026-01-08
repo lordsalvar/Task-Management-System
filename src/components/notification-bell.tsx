@@ -21,9 +21,17 @@ export function NotificationBell() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    // Initial load and check
-    loadNotifications()
-    checkForNewNotifications()
+    // Initial load and cleanup duplicates
+    const initializeNotifications = async () => {
+      // First, remove any existing duplicates
+      await notificationService.removeDuplicateNotifications()
+      // Then load notifications
+      await loadNotifications()
+      // Finally, check for new notifications
+      await checkForNewNotifications()
+    }
+    
+    initializeNotifications()
     
     // Check for new notifications every 5 minutes
     const interval = setInterval(() => {

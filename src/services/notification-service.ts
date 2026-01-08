@@ -38,6 +38,8 @@ export interface TaskReminder {
 }
 
 class NotificationService {
+  private checkingNotifications = false
+
   /**
    * Get upcoming task reminders
    */
@@ -332,9 +334,52 @@ class NotificationService {
 
       if (error) throw error
 
+      // Map database rows to Notification interface
+      const notifications: Notification[] = (data || []).map(row => ({
+        notification_id: row.notification_id,
+        user_id: row.user_id,
+        task_id: row.task_id,
+        type: row.type as 'reminder' | 'overdue' | 'upcoming' | 'completed',
+        title: row.title,
+        message: row.message,
+        is_read: row.is_read,
+        created_at: row.created_at,
+      }))
+
+      // Filter out duplicates: keep only the most recent notification for each task_id + type combination
+      const seen = new Map<string, Notification>()
+      const deduplicated: Notification[] = []
+
+      for (const notification of notifications) {
+        if (notification.task_id) {
+          const key = `${notification.task_id}-${notification.type}`
+          const existing = seen.get(key)
+          
+          if (!existing || new Date(notification.created_at) > new Date(existing.created_at)) {
+            // Remove old duplicate if exists
+            if (existing) {
+              const oldIndex = deduplicated.findIndex(n => n.notification_id === existing.notification_id)
+              if (oldIndex !== -1) {
+                deduplicated.splice(oldIndex, 1)
+              }
+            }
+            seen.set(key, notification)
+            deduplicated.push(notification)
+          }
+        } else {
+          // Notifications without task_id are kept (they're unique)
+          deduplicated.push(notification)
+        }
+      }
+
+      // Sort by created_at descending
+      deduplicated.sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      )
+
       return {
         success: true,
-        data: (data || []) as Notification[],
+        data: deduplicated,
         timestamp: new Date().toISOString(),
       }
     } catch (error) {
@@ -395,6 +440,7 @@ class NotificationService {
 
   /**
    * Create a notification
+   * Checks for existing notifications to prevent duplicates
    */
   async createNotification(
     taskId: string | null,
@@ -406,6 +452,47 @@ class NotificationService {
       const dimUser = await getCurrentUserDimUser()
       if (!dimUser) {
         throw new Error('User not found')
+      }
+
+      // Check if a notification already exists for this task and type in the last 24 hours
+      if (taskId) {
+        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000)
+        const { data: existing } = await supabase
+          .from('notifications')
+          .select('notification_id')
+          .eq('user_id', dimUser.user_id)
+          .eq('task_id', taskId)
+          .eq('type', type)
+          .gte('created_at', yesterday.toISOString())
+          .limit(1)
+
+        if (existing && existing.length > 0) {
+          // Notification already exists, return the existing one
+          const { data: existingNotification } = await supabase
+            .from('notifications')
+            .select('*')
+            .eq('notification_id', existing[0].notification_id)
+            .single()
+
+          if (existingNotification) {
+            const notification: Notification = {
+              notification_id: existingNotification.notification_id,
+              user_id: existingNotification.user_id,
+              task_id: existingNotification.task_id,
+              type: existingNotification.type as 'reminder' | 'overdue' | 'upcoming' | 'completed',
+              title: existingNotification.title,
+              message: existingNotification.message,
+              is_read: existingNotification.is_read,
+              created_at: existingNotification.created_at,
+            }
+
+            return {
+              success: true,
+              data: notification,
+              timestamp: new Date().toISOString(),
+            }
+          }
+        }
       }
 
       const { data, error } = await supabase
@@ -423,9 +510,25 @@ class NotificationService {
 
       if (error) throw error
 
+      if (!data) {
+        throw new Error('Failed to create notification')
+      }
+
+      // Map database row to Notification interface
+      const notification: Notification = {
+        notification_id: data.notification_id,
+        user_id: data.user_id,
+        task_id: data.task_id,
+        type: data.type as 'reminder' | 'overdue' | 'upcoming' | 'completed',
+        title: data.title,
+        message: data.message,
+        is_read: data.is_read,
+        created_at: data.created_at,
+      }
+
       return {
         success: true,
-        data: data as Notification,
+        data: notification,
         timestamp: new Date().toISOString(),
       }
     } catch (error) {
@@ -443,8 +546,20 @@ class NotificationService {
   /**
    * Check for upcoming and overdue tasks and create notifications
    * This should be called periodically or on app load
+   * Prevents concurrent calls to avoid duplicate notifications
    */
   async checkAndCreateNotifications(): Promise<ApiResponse<{ created: number }>> {
+    // Prevent concurrent calls
+    if (this.checkingNotifications) {
+      return {
+        success: true,
+        data: { created: 0 },
+        timestamp: new Date().toISOString(),
+      }
+    }
+
+    this.checkingNotifications = true
+
     try {
       const dimUser = await getCurrentUserDimUser()
       if (!dimUser) {
@@ -452,7 +567,6 @@ class NotificationService {
       }
 
       const now = new Date()
-      const oneDayFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000)
 
       // Get tasks that are not completed
       const { data: tasks, error: tasksError } = await supabase
@@ -481,7 +595,9 @@ class NotificationService {
         .in('type', ['upcoming', 'overdue'])
 
       const recentNotificationKeys = new Set(
-        (recentNotifications || []).map(n => `${n.task_id}-${n.type}`)
+        (recentNotifications || [])
+          .filter((n): n is { task_id: string; type: string } => n.task_id !== null)
+          .map(n => `${n.task_id}-${n.type}`)
       )
 
       let createdCount = 0
@@ -507,28 +623,34 @@ class NotificationService {
         if (isOverdue) {
           const notificationKey = `${task.task_id}-overdue`
           if (!recentNotificationKeys.has(notificationKey)) {
-            await this.createNotification(
+            const result = await this.createNotification(
               task.task_id,
               'overdue',
               'Task Overdue',
               `"${task.task_title}" is ${Math.abs(daysUntilDue)} day(s) overdue`
             )
-            createdCount++
-            recentNotificationKeys.add(notificationKey)
+            // Only count if notification was actually created (not a duplicate)
+            if (result.success) {
+              createdCount++
+              recentNotificationKeys.add(notificationKey)
+            }
           }
         }
         // Create upcoming notification (due within 24 hours)
         else if (isUpcoming) {
           const notificationKey = `${task.task_id}-upcoming`
           if (!recentNotificationKeys.has(notificationKey)) {
-            await this.createNotification(
+            const result = await this.createNotification(
               task.task_id,
               'upcoming',
               'Task Due Soon',
               `"${task.task_title}" is due ${daysUntilDue === 0 ? 'today' : `in ${daysUntilDue} day(s)`}`
             )
-            createdCount++
-            recentNotificationKeys.add(notificationKey)
+            // Only count if notification was actually created (not a duplicate)
+            if (result.success) {
+              createdCount++
+              recentNotificationKeys.add(notificationKey)
+            }
           }
         }
       }
@@ -544,6 +666,84 @@ class NotificationService {
         error: {
           code: 'NOTIFICATION_ERROR',
           message: error instanceof Error ? error.message : 'Failed to check and create notifications',
+        },
+        timestamp: new Date().toISOString(),
+      }
+    } finally {
+      this.checkingNotifications = false
+    }
+  }
+
+  /**
+   * Remove duplicate notifications from the database
+   * Keeps only the most recent notification for each task_id + type combination
+   */
+  async removeDuplicateNotifications(): Promise<ApiResponse<{ removed: number }>> {
+    try {
+      const dimUser = await getCurrentUserDimUser()
+      if (!dimUser) {
+        throw new Error('User not found')
+      }
+
+      // Get all notifications for the user
+      const { data: allNotifications, error: fetchError } = await supabase
+        .from('notifications')
+        .select('notification_id, task_id, type, created_at')
+        .eq('user_id', dimUser.user_id)
+        .order('created_at', { ascending: false })
+
+      if (fetchError) throw fetchError
+
+      if (!allNotifications || allNotifications.length === 0) {
+        return {
+          success: true,
+          data: { removed: 0 },
+          timestamp: new Date().toISOString(),
+        }
+      }
+
+      // Group by task_id + type, keep only the most recent one
+      const seen = new Map<string, string>() // key -> notification_id to keep
+      const toDelete: string[] = []
+
+      for (const notification of allNotifications) {
+        if (notification.task_id) {
+          const key = `${notification.task_id}-${notification.type}`
+          const existingId = seen.get(key)
+
+          if (!existingId) {
+            // First occurrence, keep it
+            seen.set(key, notification.notification_id)
+          } else {
+            // Duplicate found, mark for deletion
+            toDelete.push(notification.notification_id)
+          }
+        }
+      }
+
+      // Delete duplicates
+      let removedCount = 0
+      if (toDelete.length > 0) {
+        const { error: deleteError } = await supabase
+          .from('notifications')
+          .delete()
+          .in('notification_id', toDelete)
+
+        if (deleteError) throw deleteError
+        removedCount = toDelete.length
+      }
+
+      return {
+        success: true,
+        data: { removed: removedCount },
+        timestamp: new Date().toISOString(),
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'NOTIFICATION_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to remove duplicates',
         },
         timestamp: new Date().toISOString(),
       }
