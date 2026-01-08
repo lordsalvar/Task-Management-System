@@ -13,6 +13,8 @@ export type DimDateInsert = TablesInsert<'dim_date'>
 export type DimCategoryInsert = TablesInsert<'dim_category'>
 export type DimStatusInsert = TablesInsert<'dim_status'>
 export type FactTaskInsert = TablesInsert<'fact_tasks'>
+export type TaskLog = Tables<'task_logs'>
+export type TaskLogInsert = TablesInsert<'task_logs'>
 
 /**
  * Syncs a user from auth.users to dim_user table
@@ -174,5 +176,43 @@ export async function getCurrentUserDimUser(): Promise<DimUser | null> {
   }
 
   return data
+}
+
+/**
+ * Logs a task change event
+ * This is useful for tracking when dates change, especially completion dates
+ */
+export async function logTaskChange(
+  taskId: string,
+  userId: string,
+  changeType: 'completed' | 'uncompleted' | 'date_changed' | 'status_changed' | 'other',
+  fieldName?: string,
+  oldValue?: string | null,
+  newValue?: string | null,
+  completedAt?: string | null,
+  completedDateId?: number | null
+): Promise<void> {
+  const logDateId = await getOrCreateDateId(new Date())
+  
+  const logData: TaskLogInsert = {
+    task_id: taskId,
+    user_id: userId,
+    change_type: changeType,
+    field_name: fieldName || null,
+    old_value: oldValue || null,
+    new_value: newValue || null,
+    completed_at: completedAt || null,
+    completed_date_id: completedDateId || null,
+    log_date_id: logDateId,
+  }
+
+  const { error } = await supabase
+    .from('task_logs')
+    .insert(logData)
+
+  if (error) {
+    // Log error but don't throw - logging should not break the main operation
+    console.error('Failed to log task change:', error)
+  }
 }
 

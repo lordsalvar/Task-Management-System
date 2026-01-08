@@ -7,7 +7,7 @@
 import { supabase } from '../lib/supabase'
 import { apiGateway } from './api-gateway'
 import type { ApiResponse, PaginatedResponse, PaginationParams } from './types'
-import { getOrCreateDateId, getDefaultStatusId, getCurrentUserDimUser } from '../lib/db-helpers'
+import { getOrCreateDateId, getDefaultStatusId, getCurrentUserDimUser, logTaskChange } from '../lib/db-helpers'
 import type { FactTask, FactTaskInsert } from '../lib/db-helpers'
 
 export interface Task {
@@ -297,6 +297,18 @@ class TaskService {
         throw new Error('User not found')
       }
 
+      // Get current task state to track changes
+      const { data: currentTask } = await supabase
+        .from('fact_tasks')
+        .select('*')
+        .eq('task_id', taskId)
+        .eq('user_id', dimUser.user_id)
+        .single()
+
+      if (!currentTask) {
+        throw new Error('Task not found')
+      }
+
       const updateData: Partial<FactTaskInsert> = {}
       
       if (request.task_title !== undefined) updateData.task_title = request.task_title
@@ -307,16 +319,59 @@ class TaskService {
       if (request.estimated_hours !== undefined) updateData.estimated_hours = request.estimated_hours
       if (request.actual_hours !== undefined) updateData.actual_hours = request.actual_hours
 
-      // Handle completion
+      // Handle completion - log date changes
       if (request.is_completed !== undefined) {
+        const wasCompleted = currentTask.is_completed
+        const oldCompletedAt = currentTask.completed_at
+
         updateData.is_completed = request.is_completed
         if (request.is_completed) {
-          updateData.completed_at = new Date().toISOString()
-          updateData.completed_date_id = await getOrCreateDateId(new Date())
+          const newCompletedAt = new Date().toISOString()
+          const newCompletedDateId = await getOrCreateDateId(new Date())
+          updateData.completed_at = newCompletedAt
+          updateData.completed_date_id = newCompletedDateId
+
+          // Log completion with date
+          await logTaskChange(
+            taskId,
+            dimUser.user_id,
+            wasCompleted ? 'date_changed' : 'completed',
+            'completed_at',
+            oldCompletedAt,
+            newCompletedAt,
+            newCompletedAt,
+            newCompletedDateId
+          )
         } else {
+          // Log uncompletion
+          await logTaskChange(
+            taskId,
+            dimUser.user_id,
+            'uncompleted',
+            'completed_at',
+            oldCompletedAt,
+            null,
+            null,
+            null
+          )
           updateData.completed_at = null
           updateData.completed_date_id = null
         }
+      } else if (request.is_completed === undefined && currentTask.completed_at) {
+        // Check if completed_at date changed (e.g., manual date update)
+        // This would be handled if there's a direct date update in the future
+      }
+
+      // Log status changes
+      if (request.status_id !== undefined && request.status_id !== currentTask.status_id) {
+        await logTaskChange(
+          taskId,
+          dimUser.user_id,
+          'status_changed',
+          'status_id',
+          currentTask.status_id.toString(),
+          request.status_id.toString()
+        )
       }
 
       const { data, error } = await supabase

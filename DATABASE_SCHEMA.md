@@ -6,6 +6,7 @@ This document describes the star schema data warehouse structure for the Task Ma
 
 The database uses a **star schema** design pattern, which consists of:
 - **1 Fact Table**: `fact_tasks` - stores task events and metrics
+- **1 Log Table**: `task_logs` - stores task change events for analytics and auditing
 - **4 Dimension Tables**: `dim_user`, `dim_date`, `dim_category`, `dim_status` - store descriptive attributes
 
 ## Fact Table
@@ -38,6 +39,45 @@ Stores task events such as completion status and completion time.
 - `completed_at` (TIMESTAMPTZ, nullable) - Timestamp when task was completed
 - `created_at` (TIMESTAMPTZ, NOT NULL, default: now()) - Record creation timestamp
 - `updated_at` (TIMESTAMPTZ, NOT NULL, default: now()) - Record update timestamp
+
+## Log Table
+
+### `task_logs`
+Stores task change events for analytics and auditing. This table tracks when task properties change, especially completion dates, which is crucial for accurate analytics.
+
+**Primary Key**: `log_id` (UUID)
+
+**Foreign Keys**:
+- `task_id` → `fact_tasks.task_id`
+- `user_id` → `dim_user.user_id`
+- `log_date_id` → `dim_date.date_id`
+- `completed_date_id` → `dim_date.date_id` (nullable)
+
+**Columns**:
+- `log_id` (UUID, Primary Key) - Unique identifier for the log entry
+- `task_id` (UUID, NOT NULL) - Reference to the task that changed
+- `user_id` (UUID, NOT NULL) - Reference to the user who owns the task
+- `change_type` (VARCHAR(50), NOT NULL) - Type of change: 'completed', 'uncompleted', 'date_changed', 'status_changed', 'other'
+- `field_name` (VARCHAR(100), nullable) - Name of the field that changed
+- `old_value` (TEXT, nullable) - Previous value of the field
+- `new_value` (TEXT, nullable) - New value of the field
+- `completed_at` (TIMESTAMPTZ, nullable) - Timestamp when task was completed (for completion logs)
+- `completed_date_id` (INTEGER, nullable) - Reference to date dimension for completion date (for completion logs)
+- `log_date_id` (INTEGER, NOT NULL) - Reference to date dimension for when the log was created
+- `created_at` (TIMESTAMPTZ, NOT NULL, default: now()) - Record creation timestamp
+
+**Indexes**:
+- `idx_task_logs_task_id` - For filtering logs by task
+- `idx_task_logs_user_id` - For filtering logs by user
+- `idx_task_logs_change_type` - For filtering by change type
+- `idx_task_logs_completed_date_id` - For filtering completion logs by date
+- `idx_task_logs_log_date_id` - For filtering logs by log date
+
+**Use Cases**:
+- Track when tasks are completed for accurate analytics
+- Audit trail of task changes
+- Calculate productivity metrics based on actual completion dates
+- Analyze completion patterns over time
 
 ## Dimension Tables
 
@@ -157,6 +197,10 @@ All tables have Row Level Security enabled with the following policies:
 - **UPDATE**: Users can update their own tasks
 - **DELETE**: Users can delete their own tasks
 
+### `task_logs`
+- **SELECT**: Users can view their own task logs
+- **INSERT**: System automatically inserts logs (via application logic)
+
 ## Indexes
 
 The following indexes are created for optimal query performance:
@@ -169,6 +213,13 @@ The following indexes are created for optimal query performance:
 - `idx_fact_tasks_completed_date_id` - For filtering tasks by completion date
 - `idx_fact_tasks_is_completed` - For filtering completed/incomplete tasks
 - `idx_fact_tasks_created_at` - For sorting by creation timestamp
+
+### `task_logs` indexes:
+- `idx_task_logs_task_id` - For filtering logs by task
+- `idx_task_logs_user_id` - For filtering logs by user
+- `idx_task_logs_change_type` - For filtering by change type
+- `idx_task_logs_completed_date_id` - For filtering completion logs by date
+- `idx_task_logs_log_date_id` - For filtering logs by log date
 
 ## TypeScript Types
 
@@ -192,6 +243,7 @@ Utility functions are available in `src/lib/db-helpers.ts`:
 - `getDefaultStatusId()` - Gets the default status ID (Pending)
 - `getStatusIdByName()` - Gets status ID by status name
 - `getCurrentUserDimUser()` - Gets the current user's dim_user record
+- `logTaskChange()` - Logs a task change event (especially for date changes)
 
 ## Example Queries
 
@@ -231,6 +283,42 @@ FROM fact_tasks ft
 JOIN dim_date dd ON ft.created_date_id = dd.date_id
 JOIN dim_user du ON ft.user_id = du.user_id
 WHERE du.auth_user_id = auth.uid()
+GROUP BY dd.year, dd.month, dd.month_name
+ORDER BY dd.year DESC, dd.month DESC;
+```
+
+### Get task completion logs for analytics:
+```sql
+SELECT 
+  tl.task_id,
+  tl.completed_at,
+  tl.change_type,
+  dd.date as completed_date,
+  ft.task_title
+FROM task_logs tl
+JOIN fact_tasks ft ON tl.task_id = ft.task_id
+JOIN dim_date dd ON tl.completed_date_id = dd.date_id
+JOIN dim_user du ON tl.user_id = du.user_id
+WHERE du.auth_user_id = auth.uid()
+  AND tl.change_type IN ('completed', 'date_changed')
+  AND tl.completed_at IS NOT NULL
+ORDER BY tl.completed_at DESC;
+```
+
+### Get completion statistics using logs (more accurate):
+```sql
+SELECT 
+  dd.year,
+  dd.month,
+  dd.month_name,
+  COUNT(DISTINCT tl.task_id) as completed_tasks,
+  COUNT(*) as completion_events
+FROM task_logs tl
+JOIN dim_date dd ON tl.completed_date_id = dd.date_id
+JOIN dim_user du ON tl.user_id = du.user_id
+WHERE du.auth_user_id = auth.uid()
+  AND tl.change_type IN ('completed', 'date_changed')
+  AND tl.completed_at IS NOT NULL
 GROUP BY dd.year, dd.month, dd.month_name
 ORDER BY dd.year DESC, dd.month DESC;
 ```
