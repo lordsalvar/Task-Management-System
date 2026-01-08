@@ -21,13 +21,17 @@ export function NotificationBell() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    // Initial load and cleanup duplicates
+    // Initial load - cleanup duplicates only once per session
     const initializeNotifications = async () => {
-      // First, remove any existing duplicates
-      await notificationService.removeDuplicateNotifications()
-      // Then load notifications
+      // Check if we've already cleaned up in this session
+      const cleanupDone = sessionStorage.getItem('notifications_cleanup_done')
+      if (!cleanupDone) {
+        await notificationService.removeDuplicateNotifications()
+        sessionStorage.setItem('notifications_cleanup_done', 'true')
+      }
+      // Load notifications
       await loadNotifications()
-      // Finally, check for new notifications
+      // Check for new notifications (but don't create duplicates due to our fixes)
       await checkForNewNotifications()
     }
     

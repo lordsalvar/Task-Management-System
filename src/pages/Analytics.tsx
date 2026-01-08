@@ -26,8 +26,13 @@ export function Analytics() {
 
   useEffect(() => {
     if (user) {
-      syncUserOnMount()
-      loadAnalytics()
+      // Run sync and analytics load in parallel
+      Promise.all([
+        syncUserOnMount(),
+        loadAnalytics(),
+      ]).catch(error => {
+        console.error("Failed to load analytics data:", error)
+      })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])

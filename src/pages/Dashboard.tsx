@@ -20,8 +20,13 @@ export function Dashboard() {
 
   useEffect(() => {
     if (user) {
-      syncUserOnMount()
-      loadStats()
+      // Run sync and stats load in parallel
+      Promise.all([
+        syncUserOnMount(),
+        loadStats(),
+      ]).catch(error => {
+        console.error("Failed to load dashboard data:", error)
+      })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])

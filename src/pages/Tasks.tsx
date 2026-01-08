@@ -49,10 +49,15 @@ export function Tasks() {
 
   useEffect(() => {
     if (user) {
-      syncUserOnMount()
-      loadTasks()
-      loadCategories()
-      loadStatuses()
+      // Run all initial loads in parallel for better performance
+      Promise.all([
+        syncUserOnMount(),
+        loadTasks(),
+        loadCategories(),
+        loadStatuses(),
+      ]).catch(error => {
+        console.error("Failed to load initial data:", error)
+      })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])
@@ -205,6 +210,8 @@ export function Tasks() {
 
       if (error) throw error
 
+      // Clear task service cache since we added a new category
+      taskService.clearCaches()
       await loadCategories()
       setNewTaskCategory(data.category_id)
       

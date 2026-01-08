@@ -85,6 +85,174 @@ export interface TaskFilter {
 }
 
 class TaskService {
+  // Cache for frequently accessed data
+  private statusCache: Map<number, { status_id: number; status_name: string; status_order: number }> = new Map()
+  private categoryCache: Map<number, { category_id: number; category_name: string; color: string | null }> = new Map()
+  private dateCache: Map<number, { date: string; year: number; month: number; month_name: string }> = new Map()
+  private cacheInitialized = false
+
+  /**
+   * Clear caches (useful when categories/statuses are updated)
+   */
+  clearCaches(): void {
+    this.statusCache.clear()
+    this.categoryCache.clear()
+    this.dateCache.clear()
+    this.cacheInitialized = false
+  }
+
+  /**
+   * Initialize caches for statuses, categories, and dates
+   */
+  private async initializeCaches(): Promise<void> {
+    if (this.cacheInitialized) return
+
+    try {
+      // Fetch all statuses
+      const { data: statuses } = await supabase
+        .from('dim_status')
+        .select('status_id, status_name, status_order')
+
+      if (statuses) {
+        statuses.forEach(status => {
+          this.statusCache.set(status.status_id, status)
+        })
+      }
+
+      // Fetch all categories
+      const { data: categories } = await supabase
+        .from('dim_category')
+        .select('category_id, category_name, color')
+
+      if (categories) {
+        categories.forEach(category => {
+          this.categoryCache.set(category.category_id, category)
+        })
+      }
+
+      this.cacheInitialized = true
+    } catch (error) {
+      console.error('Failed to initialize caches:', error)
+    }
+  }
+
+  /**
+   * Batch enrich multiple tasks efficiently
+   */
+  private async enrichTasksBatch(tasks: FactTask[]): Promise<TaskWithRelations[]> {
+    await this.initializeCaches()
+
+    // Collect all unique IDs we need to fetch
+    const statusIds = new Set<number>()
+    const categoryIds = new Set<number>()
+    const dateIds = new Set<number>()
+
+    tasks.forEach(task => {
+      statusIds.add(task.status_id)
+      if (task.category_id) categoryIds.add(task.category_id)
+      dateIds.add(task.created_date_id)
+      if (task.completed_date_id) dateIds.add(task.completed_date_id)
+    })
+
+    // Batch fetch missing data
+    const fetchPromises: Promise<void>[] = []
+
+    // Fetch missing statuses
+    const missingStatusIds = Array.from(statusIds).filter(id => !this.statusCache.has(id))
+    if (missingStatusIds.length > 0) {
+      fetchPromises.push(
+        (async () => {
+          const { data } = await supabase
+            .from('dim_status')
+            .select('status_id, status_name, status_order')
+            .in('status_id', missingStatusIds)
+          if (data) {
+            data.forEach(status => {
+              this.statusCache.set(status.status_id, status)
+            })
+          }
+        })()
+      )
+    }
+
+    // Fetch missing categories
+    const missingCategoryIds = Array.from(categoryIds).filter(id => !this.categoryCache.has(id))
+    if (missingCategoryIds.length > 0) {
+      fetchPromises.push(
+        (async () => {
+          const { data } = await supabase
+            .from('dim_category')
+            .select('category_id, category_name, color')
+            .in('category_id', missingCategoryIds)
+          if (data) {
+            data.forEach(category => {
+              this.categoryCache.set(category.category_id, category)
+            })
+          }
+        })()
+      )
+    }
+
+    // Fetch missing dates
+    const missingDateIds = Array.from(dateIds).filter(id => !this.dateCache.has(id))
+    if (missingDateIds.length > 0) {
+      fetchPromises.push(
+        (async () => {
+          const { data } = await supabase
+            .from('dim_date')
+            .select('date_id, date, year, month, month_name')
+            .in('date_id', missingDateIds)
+          if (data) {
+            data.forEach(date => {
+              this.dateCache.set(date.date_id, {
+                date: date.date,
+                year: date.year,
+                month: date.month,
+                month_name: date.month_name,
+              })
+            })
+          }
+        })()
+      )
+    }
+
+    // Wait for all batch fetches to complete
+    await Promise.all(fetchPromises)
+
+    // Now enrich all tasks using cached data
+    return tasks.map(task => {
+      const enriched: TaskWithRelations = {
+        ...task,
+        status: this.statusCache.get(task.status_id) || {
+          status_id: task.status_id,
+          status_name: '',
+          status_order: 0,
+        },
+      }
+
+      if (task.category_id) {
+        const category = this.categoryCache.get(task.category_id)
+        if (category) {
+          enriched.category = category
+        }
+      }
+
+      const createdDate = this.dateCache.get(task.created_date_id)
+      if (createdDate) {
+        enriched.created_date = createdDate
+      }
+
+      if (task.completed_date_id) {
+        const completedDate = this.dateCache.get(task.completed_date_id)
+        if (completedDate) {
+          enriched.completed_date = completedDate
+        }
+      }
+
+      return enriched
+    })
+  }
+
   /**
    * Create a new task
    */
@@ -250,9 +418,8 @@ class TaskService {
 
       if (error) throw error
 
-      const enrichedTasks = await Promise.all(
-        (data || []).map(task => this.enrichTask(task))
-      )
+      // Use batch enrichment instead of individual enrichment
+      const enrichedTasks = await this.enrichTasksBatch(data || [])
 
       return {
         success: true,
@@ -448,65 +615,99 @@ class TaskService {
   /**
    * Enrich task with related dimension data
    */
+  /**
+   * Enrich a single task with related data (status, category, dates)
+   * Uses cache when available, falls back to individual queries if needed
+   */
   private async enrichTask(task: FactTask): Promise<TaskWithRelations> {
+    await this.initializeCaches()
+
     const enriched: TaskWithRelations = {
       ...task,
-      status: { status_id: 0, status_name: '', status_order: 0 },
+      status: this.statusCache.get(task.status_id) || {
+        status_id: task.status_id,
+        status_name: '',
+        status_order: 0,
+      },
     }
 
-    // Fetch status
-    const { data: status } = await supabase
-      .from('dim_status')
-      .select('*')
-      .eq('status_id', task.status_id)
-      .single()
+    // Fetch status from cache or database
+    if (!this.statusCache.has(task.status_id)) {
+      const { data: status } = await supabase
+        .from('dim_status')
+        .select('status_id, status_name, status_order')
+        .eq('status_id', task.status_id)
+        .single()
 
-    if (status) {
-      enriched.status = {
-        status_id: status.status_id,
-        status_name: status.status_name,
-        status_order: status.status_order,
+      if (status) {
+        this.statusCache.set(status.status_id, status)
+        enriched.status = status
       }
+    } else {
+      enriched.status = this.statusCache.get(task.status_id)!
     }
 
     // Fetch category if exists
     if (task.category_id) {
-      const { data: category } = await supabase
-        .from('dim_category')
-        .select('*')
-        .eq('category_id', task.category_id)
-        .single()
+      if (this.categoryCache.has(task.category_id)) {
+        enriched.category = this.categoryCache.get(task.category_id)!
+      } else {
+        const { data: category } = await supabase
+          .from('dim_category')
+          .select('category_id, category_name, color')
+          .eq('category_id', task.category_id)
+          .single()
 
-      if (category) {
-        enriched.category = {
-          category_id: category.category_id,
-          category_name: category.category_name,
-          color: category.color,
+        if (category) {
+          this.categoryCache.set(category.category_id, category)
+          enriched.category = category
         }
       }
     }
 
     // Fetch created date
-    const { data: createdDate } = await supabase
-      .from('dim_date')
-      .select('date, year, month, month_name')
-      .eq('date_id', task.created_date_id)
-      .single()
+    if (this.dateCache.has(task.created_date_id)) {
+      enriched.created_date = this.dateCache.get(task.created_date_id)!
+    } else {
+      const { data: createdDate } = await supabase
+        .from('dim_date')
+        .select('date_id, date, year, month, month_name')
+        .eq('date_id', task.created_date_id)
+        .single()
 
-    if (createdDate) {
-      enriched.created_date = createdDate
+      if (createdDate) {
+        const dateData = {
+          date: createdDate.date,
+          year: createdDate.year,
+          month: createdDate.month,
+          month_name: createdDate.month_name,
+        }
+        this.dateCache.set(createdDate.date_id, dateData)
+        enriched.created_date = dateData
+      }
     }
 
     // Fetch completed date if exists
     if (task.completed_date_id) {
-      const { data: completedDate } = await supabase
-        .from('dim_date')
-        .select('date, year, month, month_name')
-        .eq('date_id', task.completed_date_id)
-        .single()
+      if (this.dateCache.has(task.completed_date_id)) {
+        enriched.completed_date = this.dateCache.get(task.completed_date_id)!
+      } else {
+        const { data: completedDate } = await supabase
+          .from('dim_date')
+          .select('date_id, date, year, month, month_name')
+          .eq('date_id', task.completed_date_id)
+          .single()
 
-      if (completedDate) {
-        enriched.completed_date = completedDate
+        if (completedDate) {
+          const dateData = {
+            date: completedDate.date,
+            year: completedDate.year,
+            month: completedDate.month,
+            month_name: completedDate.month_name,
+          }
+          this.dateCache.set(completedDate.date_id, dateData)
+          enriched.completed_date = dateData
+        }
       }
     }
 
