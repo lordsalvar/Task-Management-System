@@ -3,6 +3,8 @@ import { Button } from "./components/ui/button"
 import { Routes, Route, Link } from "react-router-dom"
 import { Login } from "./pages/Login"
 import { Dashboard } from "./pages/Dashboard"
+import { Tasks } from "./pages/Tasks"
+import { Analytics } from "./pages/Analytics"
 import { ProtectedRoute } from "./components/ProtectedRoute"
 
 function App() {
@@ -14,6 +16,22 @@ function App() {
         element={
           <ProtectedRoute>
             <Dashboard />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/tasks"
+        element={
+          <ProtectedRoute>
+            <Tasks />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/analytics"
+        element={
+          <ProtectedRoute>
+            <Analytics />
           </ProtectedRoute>
         }
       />
