@@ -41,7 +41,6 @@ export function Tasks() {
   const [newTaskDescription, setNewTaskDescription] = useState("")
   const [newTaskPriority, setNewTaskPriority] = useState<number | undefined>(undefined)
   const [newTaskCategory, setNewTaskCategory] = useState<number | null>(null)
-  const [newTaskStatus, setNewTaskStatus] = useState<number | undefined>(undefined)
   const [dueDateType, setDueDateType] = useState<'datetime' | 'hours' | 'minutes'>('datetime')
   const [newTaskDueDateTime, setNewTaskDueDateTime] = useState<string>("")
   const [newTaskDueHours, setNewTaskDueHours] = useState<string>("")
@@ -283,7 +282,6 @@ export function Tasks() {
         task_title: newTaskTitle,
         task_description: newTaskDescription || undefined,
         category_id: newTaskCategory || undefined,
-        status_id: newTaskStatus,
         task_priority: newTaskPriority,
         due_date: dueDate,
       })
@@ -301,7 +299,6 @@ export function Tasks() {
         setNewTaskDescription("")
         setNewTaskPriority(undefined)
         setNewTaskCategory(null)
-        setNewTaskStatus(undefined)
         setDueDateType('datetime')
         setNewTaskDueDateTime("")
         setNewTaskDueHours("")
@@ -332,7 +329,6 @@ export function Tasks() {
     setNewTaskDescription("")
     setNewTaskPriority(undefined)
     setNewTaskCategory(null)
-    setNewTaskStatus(undefined)
     setDueDateType('datetime')
     setNewTaskDueDateTime("")
     setNewTaskDueHours("")
@@ -647,28 +643,6 @@ export function Tasks() {
                       </Select>
                     </div>
 
-                    {/* Status */}
-                    <div className="space-y-2">
-                      <Label htmlFor="task-status">Status</Label>
-                      <Select
-                        value={newTaskStatus?.toString()}
-                        onValueChange={(value) => 
-                          setNewTaskStatus(value ? parseInt(value) : undefined)
-                        }
-                        disabled={creating}
-                      >
-                        <SelectTrigger id="task-status">
-                          <SelectValue placeholder="Select status (defaults to Pending)" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {statuses.map((status) => (
-                            <SelectItem key={status.status_id} value={status.status_id.toString()}>
-                              {status.status_name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
                   </div>
 
                   {/* Category and Due Date Row */}
