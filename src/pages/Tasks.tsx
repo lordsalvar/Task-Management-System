@@ -456,8 +456,18 @@ export function Tasks() {
 
   const handleComplete = async (task: TaskWithRelations) => {
     try {
+      // Find the "Completed" status
+      const completedStatus = statuses.find(s => s.status_name.toLowerCase() === "completed")
+      if (!completedStatus) {
+        toast.error("Failed to complete task", {
+          description: "Completed status not found.",
+        })
+        return
+      }
+
       await taskService.updateTask(task.task_id, {
         is_completed: true,
+        status_id: completedStatus.status_id,
       })
       
       // Invalidate caches

@@ -7,7 +7,7 @@
 import { supabase } from '../lib/supabase'
 import { apiGateway } from './api-gateway'
 import type { ApiResponse, PaginatedResponse, PaginationParams } from './types'
-import { getOrCreateDateId, getDefaultStatusId, getCurrentUserDimUser, logTaskChange } from '../lib/db-helpers'
+import { getOrCreateDateId, getDefaultStatusId, getStatusIdByName, getCurrentUserDimUser, logTaskChange } from '../lib/db-helpers'
 import type { FactTask, FactTaskInsert } from '../lib/db-helpers'
 import { notificationService } from './notification-service'
 
@@ -534,6 +534,17 @@ class TaskService {
           const newCompletedDateId = await getOrCreateDateId(new Date())
           updateData.completed_at = newCompletedAt
           updateData.completed_date_id = newCompletedDateId
+          
+          // Automatically set status to "Completed" if status_id is not explicitly provided
+          if (request.status_id === undefined) {
+            try {
+              const completedStatusId = await getStatusIdByName('Completed')
+              updateData.status_id = completedStatusId
+            } catch (error) {
+              console.error('Failed to get Completed status ID:', error)
+              // Continue without setting status if lookup fails
+            }
+          }
 
           // Log completion with date
           await logTaskChange(
