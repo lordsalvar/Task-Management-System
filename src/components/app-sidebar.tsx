@@ -6,8 +6,6 @@ import {
   IconHelp,
   IconInnerShadowTop,
   IconListDetails,
-  IconReport,
-  IconSettings,
 } from "@tabler/icons-react"
 import type { Icon } from "@tabler/icons-react"
 
@@ -74,23 +72,12 @@ const defaultData: AppSidebarData = {
   ],
   navSecondary: [
     {
-      title: "Settings",
-      url: "#",
-      icon: IconSettings,
-    },
-    {
       title: "Get Help",
       url: "#",
       icon: IconHelp,
     },
   ],
-  documents: [
-    {
-      name: "Reports",
-      url: "#",
-      icon: IconReport,
-    },
-  ],
+  documents: [],
 }
 
 export function AppSidebar({ 

@@ -571,7 +571,7 @@ class NotificationService {
       // Get tasks that are not completed
       const { data: tasks, error: tasksError } = await supabase
         .from('fact_tasks')
-        .select('task_id, task_title, created_at, is_completed, estimated_hours')
+        .select('task_id, task_title, created_at, is_completed, estimated_hours, due_date')
         .eq('user_id', dimUser.user_id)
         .eq('is_completed', false)
 
@@ -604,17 +604,13 @@ class NotificationService {
 
       // Check each task and create notifications if needed
       for (const task of tasks) {
-        // Calculate due date: use created_at + estimated_hours, or created_at + 7 days as default
-        const createdDate = new Date(task.created_at)
-        let dueDate = new Date(createdDate)
-        
-        if (task.estimated_hours) {
-          dueDate = new Date(createdDate.getTime() + task.estimated_hours * 60 * 60 * 1000)
-        } else {
-          // Default: 7 days from creation
-          dueDate = new Date(createdDate.getTime() + 7 * 24 * 60 * 60 * 1000)
+        // Skip if task is completed or has no due date
+        if (task.is_completed || !task.due_date) {
+          continue
         }
 
+        // Use the actual due_date from the database
+        const dueDate = new Date(task.due_date)
         const daysUntilDue = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
         const isOverdue = daysUntilDue < 0
         const isUpcoming = daysUntilDue >= 0 && daysUntilDue <= 1

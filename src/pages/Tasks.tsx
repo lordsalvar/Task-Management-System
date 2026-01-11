@@ -16,7 +16,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Plus, CheckCircle2, Clock, AlertCircle, X, Loader2, Sparkles, Target } from "lucide-react"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Plus, CheckCircle2, Clock, AlertCircle, X, Loader2, Sparkles, Target, PlayCircle, Edit, MoreHorizontal } from "lucide-react"
 import { taskService } from "@/services"
 import { syncUserToDimUser } from "@/lib/db-helpers"
 import { supabase } from "@/lib/supabase"
@@ -35,8 +42,12 @@ export function Tasks() {
   const [newTaskPriority, setNewTaskPriority] = useState<number | undefined>(undefined)
   const [newTaskCategory, setNewTaskCategory] = useState<number | null>(null)
   const [newTaskStatus, setNewTaskStatus] = useState<number | undefined>(undefined)
-  const [newTaskEstimatedHours, setNewTaskEstimatedHours] = useState<string>("")
+  const [dueDateType, setDueDateType] = useState<'datetime' | 'hours' | 'minutes'>('datetime')
+  const [newTaskDueDateTime, setNewTaskDueDateTime] = useState<string>("")
+  const [newTaskDueHours, setNewTaskDueHours] = useState<string>("")
+  const [newTaskDueMinutes, setNewTaskDueMinutes] = useState<string>("")
   const [error, setError] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [creating, setCreating] = useState(false)
   const [showTaskForm, setShowTaskForm] = useState(false)
   const [categories, setCategories] = useState<Array<{ category_id: number; category_name: string; color: string | null }>>([])
@@ -47,6 +58,8 @@ export function Tasks() {
   const [newCategoryColor, setNewCategoryColor] = useState("#3b82f6")
   const [addingCategory, setAddingCategory] = useState(false)
   const [categoryError, setCategoryError] = useState<string | null>(null)
+  const [editingPriorityTask, setEditingPriorityTask] = useState<TaskWithRelations | null>(null)
+  const [newPriority, setNewPriority] = useState<number | undefined>(undefined)
 
   useEffect(() => {
     if (user) {
@@ -85,9 +98,18 @@ export function Tasks() {
       setLoading(true)
       const response = await taskService.getTasks({}, { page: 1, limit: 50 })
       if (response.success && response.data) {
-        setTasks(response.data.items)
+        const loadedTasks = response.data.items
+        setTasks(loadedTasks)
         // Cache for 1 minute (tasks can change frequently)
-        pageCache.set(CACHE_KEYS.TASKS_LIST, response.data.items, 60 * 1000)
+        pageCache.set(CACHE_KEYS.TASKS_LIST, loadedTasks, 60 * 1000)
+        
+        // Check and auto-update overdue tasks (only if statuses are loaded)
+        if (statuses.length > 0) {
+          // Run async without blocking - updates will be reflected on next load
+          checkAndUpdateOverdueTasks(loadedTasks).catch(error => {
+            console.error("Failed to check overdue tasks:", error)
+          })
+        }
       }
     } catch (error) {
       console.error("Failed to load tasks:", error)
@@ -144,13 +166,51 @@ export function Tasks() {
     }
   }
 
-  const handleCreateTask = async () => {
+  // Validation function
+  const validateTaskForm = (): boolean => {
+    const errors: Record<string, string> = {}
+
+    // Task title is required (no default value)
     if (!newTaskTitle.trim()) {
-      setError("Task title is required")
+      errors.taskTitle = "Task title is required"
+    }
+
+    // Validate due date if a type is selected
+    if (dueDateType === 'datetime' && !newTaskDueDateTime) {
+      errors.dueDate = "Please select a date and time"
+    } else if (dueDateType === 'hours') {
+      if (!newTaskDueHours) {
+        errors.dueDate = "Please enter hours"
+      } else {
+        const hours = parseFloat(newTaskDueHours)
+        if (isNaN(hours) || hours <= 0) {
+          errors.dueDate = "Hours must be a positive number"
+        }
+      }
+    } else if (dueDateType === 'minutes') {
+      if (!newTaskDueMinutes) {
+        errors.dueDate = "Please enter minutes"
+      } else {
+        const minutes = parseFloat(newTaskDueMinutes)
+        if (isNaN(minutes) || minutes <= 0) {
+          errors.dueDate = "Minutes must be a positive number"
+        }
+      }
+    }
+
+    setFieldErrors(errors)
+    return Object.keys(errors).length === 0
+  }
+
+  const handleCreateTask = async () => {
+    // Validate all required fields
+    if (!validateTaskForm()) {
+      setError("Please fill in all required fields")
       return
     }
 
     setError(null)
+    setFieldErrors({})
     setCreating(true)
 
     try {
@@ -158,7 +218,24 @@ export function Tasks() {
         await syncUserToDimUser(user.id, user.email || '', user.user_metadata?.name)
       }
 
-      const estimatedHours = newTaskEstimatedHours ? parseFloat(newTaskEstimatedHours) : undefined
+      // Calculate due_date based on input type
+      let dueDate: string | undefined = undefined
+      if (dueDateType === 'datetime' && newTaskDueDateTime) {
+        // Use the datetime directly
+        dueDate = new Date(newTaskDueDateTime).toISOString()
+      } else if (dueDateType === 'hours' && newTaskDueHours) {
+        // Calculate due date from now + hours
+        const hours = parseFloat(newTaskDueHours)
+        if (!isNaN(hours) && hours > 0) {
+          dueDate = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString()
+        }
+      } else if (dueDateType === 'minutes' && newTaskDueMinutes) {
+        // Calculate due date from now + minutes
+        const minutes = parseFloat(newTaskDueMinutes)
+        if (!isNaN(minutes) && minutes > 0) {
+          dueDate = new Date(Date.now() + minutes * 60 * 1000).toISOString()
+        }
+      }
 
       const response = await taskService.createTask({
         task_title: newTaskTitle,
@@ -166,7 +243,7 @@ export function Tasks() {
         category_id: newTaskCategory || undefined,
         status_id: newTaskStatus,
         task_priority: newTaskPriority,
-        estimated_hours: estimatedHours,
+        due_date: dueDate,
       })
 
       if (response.success) {
@@ -183,7 +260,10 @@ export function Tasks() {
         setNewTaskPriority(undefined)
         setNewTaskCategory(null)
         setNewTaskStatus(undefined)
-        setNewTaskEstimatedHours("")
+        setDueDateType('datetime')
+        setNewTaskDueDateTime("")
+        setNewTaskDueHours("")
+        setNewTaskDueMinutes("")
         setShowTaskForm(false)
         setError(null)
         toast.success("Task created successfully!", {
@@ -210,8 +290,12 @@ export function Tasks() {
     setNewTaskPriority(undefined)
     setNewTaskCategory(null)
     setNewTaskStatus(undefined)
-    setNewTaskEstimatedHours("")
+    setDueDateType('datetime')
+    setNewTaskDueDateTime("")
+    setNewTaskDueHours("")
+    setNewTaskDueMinutes("")
     setError(null)
+    setFieldErrors({})
     setShowTaskForm(false)
   }
 
@@ -324,6 +408,143 @@ export function Tasks() {
     }
   }
 
+  // Helper function to check if task is overdue
+  const isTaskOverdue = (task: TaskWithRelations): boolean => {
+    if (task.is_completed) return false
+    
+    // Check if task has a due_date field (we'll need to add this to the TaskWithRelations type)
+    // For now, we'll check if there's a due_date in the task object
+    const taskAny = task as any
+    if (taskAny.due_date) {
+      return new Date() > new Date(taskAny.due_date)
+    }
+    
+    // Fallback: use created_at + 7 days if no due_date
+    const createdDate = new Date(task.created_at)
+    const defaultDueDate = new Date(createdDate.getTime() + 7 * 24 * 60 * 60 * 1000)
+    return new Date() > defaultDueDate
+  }
+
+  // Auto-update status and priority for overdue tasks
+  const checkAndUpdateOverdueTasks = async (tasks: TaskWithRelations[]) => {
+    const overdueTasks = tasks.filter(task => isTaskOverdue(task) && !task.is_completed)
+    
+    for (const task of overdueTasks) {
+      // Find "In Progress" status ID
+      const inProgressStatus = statuses.find(s => s.status_name.toLowerCase() === "in progress")
+      if (!inProgressStatus) continue
+      
+      // Check if task needs update
+      const needsStatusUpdate = task.status_id !== inProgressStatus.status_id
+      const needsPriorityUpdate = task.task_priority !== 5 // High priority = 5
+      
+      if (needsStatusUpdate || needsPriorityUpdate) {
+        try {
+          const updateData: { status_id?: number; task_priority?: number } = {}
+          
+          if (needsStatusUpdate) {
+            updateData.status_id = inProgressStatus.status_id
+          }
+          
+          if (needsPriorityUpdate) {
+            updateData.task_priority = 5 // High priority
+          }
+          
+          await taskService.updateTask(task.task_id, updateData)
+        } catch (error) {
+          console.error(`Failed to auto-update overdue task ${task.task_id}:`, error)
+        }
+      }
+    }
+  }
+
+  const handleSetInProgress = async (task: TaskWithRelations) => {
+    try {
+      const inProgressStatus = statuses.find(s => s.status_name.toLowerCase() === "in progress")
+      if (!inProgressStatus) {
+        toast.error("Status not found", {
+          description: "In Progress status not found.",
+        })
+        return
+      }
+
+      await taskService.updateTask(task.task_id, {
+        status_id: inProgressStatus.status_id,
+      })
+      
+      // Invalidate caches
+      pageCache.clear(CACHE_KEYS.TASKS_LIST)
+      pageCache.clear(CACHE_KEYS.DASHBOARD_STATS)
+      
+      toast.success("Task set to In Progress", {
+        description: "The task status has been updated.",
+      })
+      await loadTasks()
+    } catch (error) {
+      console.error("Failed to update task:", error)
+      toast.error("Failed to update task", {
+        description: "Please try again.",
+      })
+    }
+  }
+
+  const handleComplete = async (task: TaskWithRelations) => {
+    try {
+      await taskService.updateTask(task.task_id, {
+        is_completed: true,
+      })
+      
+      // Invalidate caches
+      pageCache.clear(CACHE_KEYS.TASKS_LIST)
+      pageCache.clear(CACHE_KEYS.DASHBOARD_STATS)
+      pageCache.clear(CACHE_KEYS.ANALYTICS_DAY_OF_WEEK)
+      pageCache.clear(CACHE_KEYS.ANALYTICS_ON_TIME)
+      pageCache.clear(CACHE_KEYS.ANALYTICS_CATEGORY_TIME)
+      
+      toast.success("Task completed!", {
+        description: "Great job! Keep up the momentum.",
+      })
+      await loadTasks()
+    } catch (error) {
+      console.error("Failed to complete task:", error)
+      toast.error("Failed to complete task", {
+        description: "Please try again.",
+      })
+    }
+  }
+
+  const handleEditPriority = (task: TaskWithRelations) => {
+    setEditingPriorityTask(task)
+    setNewPriority(task.task_priority || undefined)
+  }
+
+  const handleSavePriority = async () => {
+    if (!editingPriorityTask) return
+
+    try {
+      await taskService.updateTask(editingPriorityTask.task_id, {
+        task_priority: newPriority,
+      })
+      
+      // Invalidate caches
+      pageCache.clear(CACHE_KEYS.TASKS_LIST)
+      pageCache.clear(CACHE_KEYS.DASHBOARD_STATS)
+      
+      toast.success("Priority updated", {
+        description: "The task priority has been updated.",
+      })
+      
+      setEditingPriorityTask(null)
+      setNewPriority(undefined)
+      await loadTasks()
+    } catch (error) {
+      console.error("Failed to update priority:", error)
+      toast.error("Failed to update priority", {
+        description: "Please try again.",
+      })
+    }
+  }
+
   const getStatusBadge = (statusName: string) => {
     switch (statusName.toLowerCase()) {
       case "pending":
@@ -386,9 +607,28 @@ export function Tasks() {
                       id="task-title"
                       placeholder="Enter task title..."
                       value={newTaskTitle}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewTaskTitle(e.target.value)}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                        setNewTaskTitle(e.target.value)
+                        // Clear error when user starts typing
+                        if (fieldErrors.taskTitle) {
+                          setFieldErrors(prev => {
+                            const newErrors = { ...prev }
+                            delete newErrors.taskTitle
+                            return newErrors
+                          })
+                        }
+                      }}
                       disabled={creating}
+                      className={fieldErrors.taskTitle ? "border-destructive" : ""}
+                      aria-invalid={!!fieldErrors.taskTitle}
+                      aria-describedby={fieldErrors.taskTitle ? "task-title-error" : undefined}
                     />
+                    {fieldErrors.taskTitle && (
+                      <p id="task-title-error" className="text-sm text-destructive flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" />
+                        {fieldErrors.taskTitle}
+                      </p>
+                    )}
                   </div>
 
                   {/* Task Description */}
@@ -453,7 +693,7 @@ export function Tasks() {
                     </div>
                   </div>
 
-                  {/* Category and Estimated Hours Row */}
+                  {/* Category and Due Date Row */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {/* Category */}
                     <div className="space-y-2">
@@ -479,27 +719,155 @@ export function Tasks() {
                       </Select>
                     </div>
 
-                    {/* Estimated Hours */}
+                    {/* Due Date */}
                     <div className="space-y-2">
-                      <Label htmlFor="task-estimated-hours">Estimated Hours</Label>
-                      <Input
-                        id="task-estimated-hours"
-                        type="number"
-                        step="0.5"
-                        min="0"
-                        placeholder="e.g., 2.5"
-                        value={newTaskEstimatedHours}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewTaskEstimatedHours(e.target.value)}
+                      <Label htmlFor="due-date-type">Due Date</Label>
+                      <Select
+                        value={dueDateType}
+                        onValueChange={(value: 'datetime' | 'hours' | 'minutes') => {
+                          setDueDateType(value)
+                          // Clear errors when switching types
+                          if (fieldErrors.dueDate) {
+                            setFieldErrors(prev => {
+                              const newErrors = { ...prev }
+                              delete newErrors.dueDate
+                              return newErrors
+                            })
+                          }
+                          // Clear other inputs when switching types
+                          if (value === 'datetime') {
+                            setNewTaskDueHours("")
+                            setNewTaskDueMinutes("")
+                          } else if (value === 'hours') {
+                            setNewTaskDueDateTime("")
+                            setNewTaskDueMinutes("")
+                          } else {
+                            setNewTaskDueDateTime("")
+                            setNewTaskDueHours("")
+                          }
+                        }}
                         disabled={creating}
-                      />
+                      >
+                        <SelectTrigger id="due-date-type" className={fieldErrors.dueDate ? "border-destructive" : ""}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="datetime">Date & Time</SelectItem>
+                          <SelectItem value="hours">Hours from now</SelectItem>
+                          <SelectItem value="minutes">Minutes from now</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {dueDateType === 'datetime' && (
+                        <>
+                          <Input
+                            id="task-due-datetime"
+                            type="datetime-local"
+                            value={newTaskDueDateTime}
+                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                              setNewTaskDueDateTime(e.target.value)
+                              // Clear error when user starts typing
+                              if (fieldErrors.dueDate) {
+                                setFieldErrors(prev => {
+                                  const newErrors = { ...prev }
+                                  delete newErrors.dueDate
+                                  return newErrors
+                                })
+                              }
+                            }}
+                            disabled={creating}
+                            min={new Date().toISOString().slice(0, 16)}
+                            className={fieldErrors.dueDate ? "border-destructive" : ""}
+                            aria-invalid={!!fieldErrors.dueDate}
+                            aria-describedby={fieldErrors.dueDate ? "due-date-error" : undefined}
+                          />
+                          {fieldErrors.dueDate && (
+                            <p id="due-date-error" className="text-sm text-destructive flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3" />
+                              {fieldErrors.dueDate}
+                            </p>
+                          )}
+                        </>
+                      )}
+                      {dueDateType === 'hours' && (
+                        <>
+                          <Input
+                            id="task-due-hours"
+                            type="number"
+                            step="0.5"
+                            min="0"
+                            placeholder="e.g., 2.5"
+                            value={newTaskDueHours}
+                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                              setNewTaskDueHours(e.target.value)
+                              // Clear error when user starts typing
+                              if (fieldErrors.dueDate) {
+                                setFieldErrors(prev => {
+                                  const newErrors = { ...prev }
+                                  delete newErrors.dueDate
+                                  return newErrors
+                                })
+                              }
+                            }}
+                            disabled={creating}
+                            className={fieldErrors.dueDate ? "border-destructive" : ""}
+                            aria-invalid={!!fieldErrors.dueDate}
+                            aria-describedby={fieldErrors.dueDate ? "due-date-error" : undefined}
+                          />
+                          {fieldErrors.dueDate && (
+                            <p id="due-date-error" className="text-sm text-destructive flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3" />
+                              {fieldErrors.dueDate}
+                            </p>
+                          )}
+                        </>
+                      )}
+                      {dueDateType === 'minutes' && (
+                        <>
+                          <Input
+                            id="task-due-minutes"
+                            type="number"
+                            step="1"
+                            min="0"
+                            placeholder="e.g., 30"
+                            value={newTaskDueMinutes}
+                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                              setNewTaskDueMinutes(e.target.value)
+                              // Clear error when user starts typing
+                              if (fieldErrors.dueDate) {
+                                setFieldErrors(prev => {
+                                  const newErrors = { ...prev }
+                                  delete newErrors.dueDate
+                                  return newErrors
+                                })
+                              }
+                            }}
+                            disabled={creating}
+                            className={fieldErrors.dueDate ? "border-destructive" : ""}
+                            aria-invalid={!!fieldErrors.dueDate}
+                            aria-describedby={fieldErrors.dueDate ? "due-date-error" : undefined}
+                          />
+                          {fieldErrors.dueDate && (
+                            <p id="due-date-error" className="text-sm text-destructive flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3" />
+                              {fieldErrors.dueDate}
+                            </p>
+                          )}
+                        </>
+                      )}
                     </div>
                   </div>
 
-                  {/* Error Message */}
+                  {/* Error Messages */}
                   {error && (
                     <div className="text-sm text-destructive flex items-center gap-2 p-3 bg-destructive/10 rounded-md">
                       <AlertCircle className="w-4 h-4" />
                       {error}
+                    </div>
+                  )}
+                  {Object.keys(fieldErrors).length > 0 && !error && (
+                    <div className="text-sm text-destructive flex items-center gap-2 p-3 bg-destructive/10 rounded-md">
+                      <AlertCircle className="w-4 h-4" />
+                      Please fix the errors above before submitting
                     </div>
                   )}
 
@@ -515,7 +883,7 @@ export function Tasks() {
                     </Button>
                     <Button
                       onClick={handleCreateTask}
-                      disabled={creating || !newTaskTitle.trim()}
+                      disabled={creating}
                       className="transition-all duration-300 hover:scale-105 disabled:opacity-50"
                     >
                       {creating ? (
@@ -584,7 +952,7 @@ export function Tasks() {
                       <TableHead>Task</TableHead>
                       <TableHead>Category</TableHead>
                       <TableHead>Priority</TableHead>
-                      <TableHead>Estimated</TableHead>
+                      <TableHead>Due Date</TableHead>
                       <TableHead>Created</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
@@ -651,11 +1019,25 @@ export function Tasks() {
                           )}
                         </TableCell>
                         <TableCell>
-                          {task.estimated_hours ? (
-                            <span className="text-sm">{task.estimated_hours}h</span>
-                          ) : (
-                            <span className="text-muted-foreground">-</span>
-                          )}
+                          {(() => {
+                            const taskAny = task as any
+                            if (taskAny.due_date) {
+                              const dueDate = new Date(taskAny.due_date)
+                              const now = new Date()
+                              const isOverdue = dueDate < now && !task.is_completed
+                              return (
+                                <div className="flex flex-col">
+                                  <span className={`text-sm ${isOverdue ? 'text-destructive font-semibold' : ''}`}>
+                                    {dueDate.toLocaleDateString()} {dueDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                  {isOverdue && (
+                                    <span className="text-xs text-destructive">Overdue</span>
+                                  )}
+                                </div>
+                              )
+                            }
+                            return <span className="text-muted-foreground">-</span>
+                          })()}
                         </TableCell>
                         <TableCell>
                           {task.created_date ? (
@@ -667,18 +1049,57 @@ export function Tasks() {
                           )}
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              if (confirm("Are you sure you want to delete this task?")) {
-                                handleDeleteTask(task.task_id)
-                              }
-                            }}
-                            className="transition-all duration-200 hover:bg-destructive/10 hover:text-destructive hover:scale-105"
-                          >
-                            Delete
-                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0 data-[state=open]:bg-muted"
+                              >
+                                <span className="sr-only">Open menu</span>
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-48">
+                              {!task.is_completed && (
+                                <>
+                                  <DropdownMenuItem
+                                    onClick={() => handleSetInProgress(task)}
+                                    className="cursor-pointer"
+                                  >
+                                    <PlayCircle className="mr-2 h-4 w-4 text-blue-600" />
+                                    <span>Set to In Progress</span>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => handleComplete(task)}
+                                    className="cursor-pointer"
+                                  >
+                                    <CheckCircle2 className="mr-2 h-4 w-4 text-green-600" />
+                                    <span>Mark as Complete</span>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => handleEditPriority(task)}
+                                    className="cursor-pointer"
+                                  >
+                                    <Edit className="mr-2 h-4 w-4 text-purple-600" />
+                                    <span>Edit Priority</span>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                </>
+                              )}
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  if (confirm("Are you sure you want to delete this task?")) {
+                                    handleDeleteTask(task.task_id)
+                                  }
+                                }}
+                                className="cursor-pointer text-destructive focus:text-destructive"
+                              >
+                                <X className="mr-2 h-4 w-4" />
+                                <span>Delete Task</span>
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -776,6 +1197,57 @@ export function Tasks() {
               disabled={addingCategory || !newCategoryName.trim()}
             >
               {addingCategory ? "Adding..." : "Add Category"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Priority Dialog */}
+      <Dialog open={!!editingPriorityTask} onOpenChange={(open) => {
+        if (!open) {
+          setEditingPriorityTask(null)
+          setNewPriority(undefined)
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Priority</DialogTitle>
+            <DialogDescription>
+              Set the priority level for "{editingPriorityTask?.task_title}"
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="priority-select">Priority Level</Label>
+              <Select
+                value={newPriority?.toString()}
+                onValueChange={(value) => setNewPriority(value ? parseInt(value) : undefined)}
+              >
+                <SelectTrigger id="priority-select">
+                  <SelectValue placeholder="Select priority" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="1">1 - Lowest</SelectItem>
+                  <SelectItem value="2">2 - Low</SelectItem>
+                  <SelectItem value="3">3 - Medium</SelectItem>
+                  <SelectItem value="4">4 - High</SelectItem>
+                  <SelectItem value="5">5 - Highest</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setEditingPriorityTask(null)
+                setNewPriority(undefined)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleSavePriority}>
+              Save Priority
             </Button>
           </DialogFooter>
         </DialogContent>

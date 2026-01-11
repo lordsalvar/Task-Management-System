@@ -24,6 +24,7 @@ export interface Task {
   actual_hours: number | null
   is_completed: boolean
   completed_at: string | null
+  due_date: string | null
   created_at: string
   updated_at: string
 }
@@ -276,7 +277,7 @@ class TaskService {
       const createdDateId = await getOrCreateDateId(new Date())
       const statusId = request.status_id || await getDefaultStatusId()
 
-      const taskData: FactTaskInsert = {
+      const taskData: FactTaskInsert & { due_date?: string } = {
         user_id: dimUser.user_id,
         category_id: request.category_id || null,
         status_id: statusId,
@@ -286,6 +287,11 @@ class TaskService {
         task_priority: request.task_priority || null,
         estimated_hours: request.estimated_hours || null,
         is_completed: false,
+      }
+
+      // Add due_date if provided
+      if (request.due_date) {
+        taskData.due_date = request.due_date
       }
 
       const { data, error } = await supabase
@@ -476,7 +482,7 @@ class TaskService {
         throw new Error('Task not found')
       }
 
-      const updateData: Partial<FactTaskInsert> = {}
+      const updateData: Partial<FactTaskInsert & { due_date?: string }> = {}
       
       if (request.task_title !== undefined) updateData.task_title = request.task_title
       if (request.task_description !== undefined) updateData.task_description = request.task_description
@@ -485,6 +491,9 @@ class TaskService {
       if (request.task_priority !== undefined) updateData.task_priority = request.task_priority
       if (request.estimated_hours !== undefined) updateData.estimated_hours = request.estimated_hours
       if (request.actual_hours !== undefined) updateData.actual_hours = request.actual_hours
+      if (request.due_date !== undefined) {
+        updateData.due_date = request.due_date || undefined
+      }
 
       // Handle completion - log date changes
       if (request.is_completed !== undefined) {
@@ -712,6 +721,43 @@ class TaskService {
     }
 
     return enriched
+  }
+
+  /**
+   * Check and update overdue tasks
+   * This calls the database function to mark tasks as overdue if their due_date has passed
+   */
+  async checkAndUpdateOverdueTasks(): Promise<ApiResponse<{ updated_count: number }>> {
+    try {
+      // Call the database function via RPC
+      const { data: functionResult, error: functionError } = await supabase.rpc(
+        'check_and_update_overdue_tasks' as any,
+        {}
+      )
+
+      if (functionError) throw functionError
+
+      const updatedCount = functionResult && Array.isArray(functionResult) && functionResult.length > 0
+        ? (functionResult[0] as { updated_count: number }).updated_count
+        : 0
+
+      return {
+        success: true,
+        data: {
+          updated_count: updatedCount,
+        },
+        timestamp: new Date().toISOString(),
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: 'OVERDUE_CHECK_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to check overdue tasks',
+        },
+        timestamp: new Date().toISOString(),
+      }
+    }
   }
 }
 

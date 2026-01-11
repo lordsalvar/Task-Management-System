@@ -9,7 +9,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { supabase } from "@/lib/supabase"
+import { userService } from "@/services"
 
 export function LoginForm({
   className,
@@ -31,29 +31,30 @@ export function LoginForm({
 
     try {
       if (isSignUp) {
-        // Sign up
-        const { data, error: signUpError } = await supabase.auth.signUp({
+        // Sign up - goes through API Gateway → User Service → Database
+        const result = await userService.signUp({
           email,
           password,
         })
 
-        if (signUpError) throw signUpError
+        if (!result.success) {
+          throw new Error(result.error?.message || "Failed to create account")
+        }
 
-        if (data.user) {
+        if (result.data?.user) {
           setMessage("Account created! Please check your email to verify your account.")
           // Optionally auto-login after signup
           // navigate("/dashboard")
         }
       } else {
-        // Sign in
-        const { data, error: signInError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        })
+        // Sign in - goes through API Gateway → User Service → Database
+        const result = await userService.signIn(email, password)
 
-        if (signInError) throw signInError
+        if (!result.success) {
+          throw new Error(result.error?.message || "Failed to sign in")
+        }
 
-        if (data.user) {
+        if (result.data?.user) {
           navigate("/dashboard")
         }
       }
