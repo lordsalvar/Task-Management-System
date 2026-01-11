@@ -5,6 +5,7 @@ import { Login } from "./pages/Login"
 import { Dashboard } from "./pages/Dashboard"
 import { Tasks } from "./pages/Tasks"
 import { Analytics } from "./pages/Analytics"
+import { ChatAssistant } from "./pages/ChatAssistant"
 import { ProtectedRoute } from "./components/ProtectedRoute"
 
 function App() {
@@ -32,6 +33,14 @@ function App() {
         element={
           <ProtectedRoute>
             <Analytics />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/chat-assistant"
+        element={
+          <ProtectedRoute>
+            <ChatAssistant />
           </ProtectedRoute>
         }
       />

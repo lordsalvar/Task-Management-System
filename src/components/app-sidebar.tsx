@@ -3,11 +3,11 @@ import { Link } from "react-router-dom"
 import {
   IconChartBar,
   IconDashboard,
-  IconHelp,
   IconInnerShadowTop,
   IconListDetails,
 } from "@tabler/icons-react"
 import type { Icon } from "@tabler/icons-react"
+import { Bot } from "lucide-react"
 
 import { NavDocuments } from "@/components/nav-documents"
 import { NavMain } from "@/components/nav-main"
@@ -38,7 +38,7 @@ type AppSidebarData = {
   navSecondary: Array<{
     title: string
     url: string
-    icon: Icon
+    icon: Icon | React.ComponentType<{ className?: string }>
   }>
   documents: Array<{
     name: string
@@ -72,9 +72,9 @@ const defaultData: AppSidebarData = {
   ],
   navSecondary: [
     {
-      title: "Get Help",
+      title: "Chat Assistant",
       url: "#",
-      icon: IconHelp,
+      icon: Bot,
     },
   ],
   documents: [],

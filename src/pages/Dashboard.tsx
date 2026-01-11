@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react"
 import { useAuth } from "@/contexts/AuthContext"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Target, CheckCircle2, Clock, BarChart3 } from "lucide-react"
+import { Target, CheckCircle2, Clock, BarChart3, Timer } from "lucide-react"
 import { analyticsService } from "@/services"
 import { syncUserToDimUser } from "@/lib/db-helpers"
 import { AppLayout } from "@/components/AppLayout"
@@ -17,6 +17,7 @@ export function Dashboard() {
     pending: 0,
     inProgress: 0,
     completionRate: 0,
+    onTimeCompletionRate: 0,
   })
 
   useEffect(() => {
@@ -52,14 +53,21 @@ export function Dashboard() {
 
     try {
       setLoading(true)
-      const response = await analyticsService.getCompletionStats()
-      if (response.success && response.data) {
+      const [completionResponse, onTimeResponse] = await Promise.all([
+        analyticsService.getCompletionStats(),
+        analyticsService.getOnTimeCompletionStats(),
+      ])
+      
+      if (completionResponse.success && completionResponse.data) {
         const statsData = {
-          total: response.data.total_tasks,
-          completed: response.data.completed_tasks,
-          pending: response.data.pending_tasks,
-          inProgress: response.data.in_progress_tasks,
-          completionRate: response.data.completion_rate,
+          total: completionResponse.data.total_tasks,
+          completed: completionResponse.data.completed_tasks,
+          pending: completionResponse.data.pending_tasks,
+          inProgress: completionResponse.data.in_progress_tasks,
+          completionRate: completionResponse.data.completion_rate,
+          onTimeCompletionRate: onTimeResponse.success && onTimeResponse.data 
+            ? onTimeResponse.data.on_time_percentage 
+            : 0,
         }
         setStats(statsData)
         // Cache for 2 minutes (stats can change frequently)
@@ -89,7 +97,7 @@ export function Dashboard() {
           </div>
 
           {/* Statistics Cards */}
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
             <Card className="group relative overflow-hidden transition-all duration-300 hover:shadow-lg hover:scale-[1.02] animate-in fade-in slide-in-from-bottom-4 duration-500 [animation-delay:100ms]">
               <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 relative z-10">
@@ -150,6 +158,22 @@ export function Dashboard() {
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
                   Success rate
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="group relative overflow-hidden transition-all duration-300 hover:shadow-lg hover:scale-[1.02] animate-in fade-in slide-in-from-bottom-4 duration-500 [animation-delay:500ms]">
+              <div className="absolute inset-0 bg-gradient-to-br from-orange-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 relative z-10">
+                <CardTitle className="text-sm font-medium">On-Time Rate</CardTitle>
+                <Timer className="h-4 w-4 text-muted-foreground group-hover:text-orange-500 transition-colors duration-300" />
+              </CardHeader>
+              <CardContent className="relative z-10">
+                <div className="text-2xl font-bold tabular-nums transition-all duration-300 group-hover:scale-110 inline-block">
+                  {loading ? <Skeleton className="h-8 w-16" /> : `${stats.onTimeCompletionRate.toFixed(1)}%`}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Completed on time
                 </p>
               </CardContent>
             </Card>

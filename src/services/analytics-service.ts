@@ -730,9 +730,10 @@ class AnalyticsService {
    * Get on-time completion percentage
    * Business Question 2: What percentage of tasks are completed on or before their due dates?
    * 
-   * Note: Since due_date is not yet in the database schema, we'll use created_at + estimated_hours
-   * as a proxy for due date, or we can calculate based on average completion time.
-   * For now, we'll use a simple approach: tasks completed within estimated time or within 7 days of creation.
+   * Uses the actual due_date field to determine if tasks were completed on time.
+   * A task is considered late if:
+   * - It has a due_date and completed_at > due_date
+   * - If no due_date exists, falls back to estimated_hours or 7 days default
    */
   async getOnTimeCompletionStats(
     startDate?: string,
@@ -744,10 +745,10 @@ class AnalyticsService {
         throw new Error('User not found')
       }
 
-      // Get completed tasks with creation and completion dates
+      // Get completed tasks with creation, completion dates, and due_date
       let query = supabase
         .from('fact_tasks')
-        .select('task_id, created_at, completed_at, estimated_hours, actual_hours')
+        .select('task_id, created_at, completed_at, due_date, estimated_hours, actual_hours, status_id')
         .eq('user_id', dimUser.user_id)
         .eq('is_completed', true)
         .not('completed_at', 'is', null)
@@ -782,12 +783,27 @@ class AnalyticsService {
       tasks.forEach(task => {
         if (!task.completed_at || !task.created_at) return
 
-        const created = new Date(task.created_at)
         const completed = new Date(task.completed_at)
+
+        // Primary logic: Use due_date if available
+        if (task.due_date) {
+          const dueDate = new Date(task.due_date)
+          // Task is late if completed after due_date
+          if (completed > dueDate) {
+            lateCount++
+            return
+          } else {
+            // Completed on or before due_date
+            onTimeCount++
+            return
+          }
+        }
+
+        // Fallback logic: Use estimated_hours or default if no due_date
+        // This handles tasks without due dates for backward compatibility
+        const created = new Date(task.created_at)
         const completionTimeHours = (completed.getTime() - created.getTime()) / (1000 * 60 * 60)
 
-        // Determine if task was completed on time
-        // If estimated_hours exists, use it; otherwise use 7 days as default
         let expectedHours = 7 * 24 // Default: 7 days
         if (task.estimated_hours) {
           expectedHours = task.estimated_hours

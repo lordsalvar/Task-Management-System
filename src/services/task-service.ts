@@ -9,6 +9,7 @@ import { apiGateway } from './api-gateway'
 import type { ApiResponse, PaginatedResponse, PaginationParams } from './types'
 import { getOrCreateDateId, getDefaultStatusId, getCurrentUserDimUser, logTaskChange } from '../lib/db-helpers'
 import type { FactTask, FactTaskInsert } from '../lib/db-helpers'
+import { notificationService } from './notification-service'
 
 export interface Task {
   task_id: string
@@ -302,9 +303,36 @@ class TaskService {
 
       if (error) throw error
 
+      const enrichedTask = await this.enrichTask(data)
+
+      // Create notification for task creation
+      let creationMessage = `Task "${request.task_title}" has been created`
+      if (request.due_date) {
+        const dueDate = new Date(request.due_date)
+        const formattedDate = dueDate.toLocaleDateString('en-US', { 
+          year: 'numeric', 
+          month: 'short', 
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        })
+        creationMessage += `. Due date: ${formattedDate}`
+      }
+      creationMessage += '.'
+      
+      await notificationService.createNotification(
+        data.task_id,
+        'reminder',
+        'New Task Created',
+        creationMessage
+      ).catch(error => {
+        // Don't fail task creation if notification fails
+        console.error('Failed to create notification for task creation:', error)
+      })
+
       return {
         success: true,
-        data: await this.enrichTask(data),
+        data: enrichedTask,
         timestamp: new Date().toISOString(),
       }
     } catch (error) {
@@ -518,6 +546,34 @@ class TaskService {
             newCompletedAt,
             newCompletedDateId
           )
+
+          // Create notification for task completion (only if it wasn't already completed)
+          if (!wasCompleted) {
+            let completionMessage = `Task "${currentTask.task_title}" has been completed.`
+            const taskAny = currentTask as any
+            if (taskAny.due_date) {
+              const dueDate = new Date(taskAny.due_date)
+              const formattedDate = dueDate.toLocaleDateString('en-US', { 
+                year: 'numeric', 
+                month: 'short', 
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              })
+              completionMessage += ` Due date was: ${formattedDate}.`
+            }
+            completionMessage += ' Great job!'
+            
+            await notificationService.createNotification(
+              taskId,
+              'completed',
+              'Task Completed',
+              completionMessage
+            ).catch(error => {
+              // Don't fail task update if notification fails
+              console.error('Failed to create notification for task completion:', error)
+            })
+          }
         } else {
           // Log uncompletion
           await logTaskChange(
@@ -726,9 +782,53 @@ class TaskService {
   /**
    * Check and update overdue tasks
    * This calls the database function to mark tasks as overdue if their due_date has passed
+   * Also creates notifications for newly overdue tasks
    */
   async checkAndUpdateOverdueTasks(): Promise<ApiResponse<{ updated_count: number }>> {
     try {
+      const dimUser = await getCurrentUserDimUser()
+      if (!dimUser) {
+        throw new Error('User not found')
+      }
+
+      // Get the Overdue status ID
+      const { data: overdueStatus } = await supabase
+        .from('dim_status')
+        .select('status_id')
+        .eq('status_name', 'Overdue')
+        .single()
+
+      if (!overdueStatus) {
+        // Overdue status doesn't exist, just run the check without notifications
+        const { data: functionResult, error: functionError } = await supabase.rpc(
+          'check_and_update_overdue_tasks' as any,
+          {}
+        )
+        if (functionError) throw functionError
+        const updatedCount = functionResult && Array.isArray(functionResult) && functionResult.length > 0
+          ? (functionResult[0] as { updated_count: number }).updated_count
+          : 0
+        return {
+          success: true,
+          data: { updated_count: updatedCount },
+          timestamp: new Date().toISOString(),
+        }
+      }
+
+      const overdueStatusId = overdueStatus.status_id
+
+      // Get list of tasks that are already overdue before the update
+      const { data: previouslyOverdue } = await supabase
+        .from('fact_tasks')
+        .select('task_id')
+        .eq('user_id', dimUser.user_id)
+        .eq('is_completed', false)
+        .not('due_date', 'is', null)
+        .lt('due_date', new Date().toISOString())
+        .eq('status_id', overdueStatusId)
+
+      const previouslyOverdueIds = new Set((previouslyOverdue || []).map(t => t.task_id))
+
       // Call the database function via RPC
       const { data: functionResult, error: functionError } = await supabase.rpc(
         'check_and_update_overdue_tasks' as any,
@@ -740,6 +840,45 @@ class TaskService {
       const updatedCount = functionResult && Array.isArray(functionResult) && functionResult.length > 0
         ? (functionResult[0] as { updated_count: number }).updated_count
         : 0
+
+      // Get tasks that are now overdue (after the update)
+      const { data: nowOverdue } = await supabase
+        .from('fact_tasks')
+        .select('task_id, task_title, due_date')
+        .eq('user_id', dimUser.user_id)
+        .eq('is_completed', false)
+        .eq('status_id', overdueStatusId)
+        .not('due_date', 'is', null)
+
+      // Find newly overdue tasks (tasks that are now overdue but weren't before)
+      const newlyOverdue = (nowOverdue || []).filter(task => !previouslyOverdueIds.has(task.task_id))
+
+      // Create notifications for newly overdue tasks
+      for (const task of newlyOverdue) {
+        let overdueMessage = `Task "${task.task_title}" is now overdue.`
+        if (task.due_date) {
+          const dueDate = new Date(task.due_date)
+          const formattedDate = dueDate.toLocaleDateString('en-US', { 
+            year: 'numeric', 
+            month: 'short', 
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          })
+          overdueMessage += ` Due date was: ${formattedDate}.`
+        }
+        overdueMessage += ' Please complete it soon.'
+        
+        await notificationService.createNotification(
+          task.task_id,
+          'overdue',
+          'Task Overdue',
+          overdueMessage
+        ).catch(error => {
+          // Don't fail if notification creation fails
+          console.error(`Failed to create notification for overdue task ${task.task_id}:`, error)
+        })
+      }
 
       return {
         success: true,
