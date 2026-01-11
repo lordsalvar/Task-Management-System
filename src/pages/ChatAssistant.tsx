@@ -204,7 +204,7 @@ export function ChatAssistant() {
   }
 
   return (
-    <AppLayout pageTitle="Chat Assistant">
+    <AppLayout pageTitle="Task Assistant">
       <main className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="max-w-4xl mx-auto space-y-6">
           {/* Header */}
@@ -212,7 +212,7 @@ export function ChatAssistant() {
             <div>
               <h1 className="text-3xl font-bold bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-transparent flex items-center gap-2">
                 <MessageCircle className="h-8 w-8 text-primary" />
-                Chat Assistant
+                Task Assistant
               </h1>
               <p className="text-muted-foreground mt-2">
                 Ask me anything about your tasks and I'll help you with real-time information.

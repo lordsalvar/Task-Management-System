@@ -28,7 +28,7 @@ export function AppLayout({ children, pageTitle }: AppLayoutProps) {
     if (location.pathname === "/dashboard") return "Dashboard"
     if (location.pathname === "/tasks") return "Tasks"
     if (location.pathname === "/analytics") return "Analytics"
-    if (location.pathname === "/chat-assistant") return "Chat Assistant"
+    if (location.pathname === "/chat-assistant") return "Task Assistant"
     return "Dashboard"
   }
 
@@ -59,7 +59,7 @@ export function AppLayout({ children, pageTitle }: AppLayoutProps) {
     ],
     navSecondary: [
       {
-        title: "Chat Assistant",
+        title: "Task Assistant",
         url: "/chat-assistant",
         icon: Bot,
       },

@@ -72,7 +72,7 @@ const defaultData: AppSidebarData = {
   ],
   navSecondary: [
     {
-      title: "Chat Assistant",
+      title: "Task Assistant",
       url: "#",
       icon: Bot,
     },
