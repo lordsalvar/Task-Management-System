@@ -4,7 +4,8 @@ import { useNavigate, useLocation } from "react-router-dom"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar"
-import { IconDashboard, IconListDetails, IconChartBar, IconHelp } from "@tabler/icons-react"
+import { IconDashboard, IconListDetails, IconChartBar } from "@tabler/icons-react"
+import { Bot } from "lucide-react"
 
 interface AppLayoutProps {
   children: ReactNode
@@ -27,6 +28,7 @@ export function AppLayout({ children, pageTitle }: AppLayoutProps) {
     if (location.pathname === "/dashboard") return "Dashboard"
     if (location.pathname === "/tasks") return "Tasks"
     if (location.pathname === "/analytics") return "Analytics"
+    if (location.pathname === "/chat-assistant") return "Chat Assistant"
     return "Dashboard"
   }
 
@@ -57,9 +59,9 @@ export function AppLayout({ children, pageTitle }: AppLayoutProps) {
     ],
     navSecondary: [
       {
-        title: "Get Help",
-        url: "#",
-        icon: IconHelp,
+        title: "Chat Assistant",
+        url: "/chat-assistant",
+        icon: Bot,
       },
     ],
     documents: [],

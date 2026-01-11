@@ -184,19 +184,36 @@ class NotificationService {
     }
 
     try {
-      // Get task details
+      // Get task details with due date
       const { data: task, error: taskError } = await supabase
         .from('fact_tasks')
-        .select('task_title')
+        .select('task_title, due_date')
         .eq('task_id', taskId)
         .single()
 
       if (taskError) throw taskError
 
       const title = reminderType === 'overdue' ? 'Task Overdue' : 'Task Due Soon'
-      const message = reminderType === 'overdue'
-        ? `"${task.task_title}" is overdue`
-        : `"${task.task_title}" is due soon`
+      let message = `"${task.task_title}"`
+      
+      if (task.due_date) {
+        const dueDate = new Date(task.due_date)
+        const formattedDate = dueDate.toLocaleDateString('en-US', { 
+          year: 'numeric', 
+          month: 'short', 
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        })
+        
+        if (reminderType === 'overdue') {
+          message += ` is overdue. Due date was: ${formattedDate}.`
+        } else {
+          message += ` is due soon. Due date: ${formattedDate}.`
+        }
+      } else {
+        message += reminderType === 'overdue' ? ' is overdue' : ' is due soon'
+      }
 
       // Create notification
       await this.createNotification(taskId, reminderType, title, message)
@@ -615,15 +632,25 @@ class NotificationService {
         const isOverdue = daysUntilDue < 0
         const isUpcoming = daysUntilDue >= 0 && daysUntilDue <= 1
 
+        // Format due date for display
+        const formattedDueDate = dueDate.toLocaleDateString('en-US', { 
+          year: 'numeric', 
+          month: 'short', 
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        })
+
         // Create overdue notification
         if (isOverdue) {
           const notificationKey = `${task.task_id}-overdue`
           if (!recentNotificationKeys.has(notificationKey)) {
+            const overdueMessage = `"${task.task_title}" is ${Math.abs(daysUntilDue)} day(s) overdue. Due date was: ${formattedDueDate}.`
             const result = await this.createNotification(
               task.task_id,
               'overdue',
               'Task Overdue',
-              `"${task.task_title}" is ${Math.abs(daysUntilDue)} day(s) overdue`
+              overdueMessage
             )
             // Only count if notification was actually created (not a duplicate)
             if (result.success) {
@@ -636,11 +663,12 @@ class NotificationService {
         else if (isUpcoming) {
           const notificationKey = `${task.task_id}-upcoming`
           if (!recentNotificationKeys.has(notificationKey)) {
+            const upcomingMessage = `"${task.task_title}" is due ${daysUntilDue === 0 ? 'today' : `in ${daysUntilDue} day(s)`}. Due date: ${formattedDueDate}.`
             const result = await this.createNotification(
               task.task_id,
               'upcoming',
               'Task Due Soon',
-              `"${task.task_title}" is due ${daysUntilDue === 0 ? 'today' : `in ${daysUntilDue} day(s)`}`
+              upcomingMessage
             )
             // Only count if notification was actually created (not a duplicate)
             if (result.success) {

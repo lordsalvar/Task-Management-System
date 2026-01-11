@@ -76,6 +76,46 @@ export function Tasks() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])
 
+  // Periodic check for overdue tasks and refresh (every 30 seconds)
+  useEffect(() => {
+    if (!user) return
+
+    const interval = setInterval(() => {
+      // Check overdue tasks and refresh the list
+      taskService.checkAndUpdateOverdueTasks()
+        .then(() => {
+          // Refresh tasks after checking overdue (but use cache if available for performance)
+          loadTasks(false)
+        })
+        .catch(error => {
+          console.error("Failed to check overdue tasks:", error)
+        })
+    }, 30 * 1000) // Every 30 seconds
+
+    return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user])
+
+  // Refresh tasks when window regains focus
+  useEffect(() => {
+    if (!user) return
+
+    const handleFocus = () => {
+      // Check overdue tasks and force refresh when user returns to the page
+      taskService.checkAndUpdateOverdueTasks()
+        .then(() => {
+          loadTasks(true) // Force refresh on focus
+        })
+        .catch(error => {
+          console.error("Failed to check overdue tasks on focus:", error)
+        })
+    }
+
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user])
+
   const syncUserOnMount = async () => {
     if (!user) return
     try {
@@ -85,31 +125,33 @@ export function Tasks() {
     }
   }
 
-  const loadTasks = async () => {
-    // Check cache first
-    const cached = pageCache.get<TaskWithRelations[]>(CACHE_KEYS.TASKS_LIST)
-    if (cached) {
-      setTasks(cached)
-      setLoading(false)
-      return
+  const loadTasks = async (forceRefresh = false) => {
+    // Check cache first (unless forcing refresh)
+    if (!forceRefresh) {
+      const cached = pageCache.get<TaskWithRelations[]>(CACHE_KEYS.TASKS_LIST)
+      if (cached) {
+        setTasks(cached)
+        setLoading(false)
+        return
+      }
     }
 
     try {
       setLoading(true)
+      
+      // First, check and update overdue tasks using the database function
+      // This ensures status is up-to-date before loading
+      await taskService.checkAndUpdateOverdueTasks().catch(error => {
+        console.error("Failed to check overdue tasks:", error)
+        // Don't block if this fails
+      })
+      
       const response = await taskService.getTasks({}, { page: 1, limit: 50 })
       if (response.success && response.data) {
         const loadedTasks = response.data.items
         setTasks(loadedTasks)
         // Cache for 1 minute (tasks can change frequently)
         pageCache.set(CACHE_KEYS.TASKS_LIST, loadedTasks, 60 * 1000)
-        
-        // Check and auto-update overdue tasks (only if statuses are loaded)
-        if (statuses.length > 0) {
-          // Run async without blocking - updates will be reflected on next load
-          checkAndUpdateOverdueTasks(loadedTasks).catch(error => {
-            console.error("Failed to check overdue tasks:", error)
-          })
-        }
       }
     } catch (error) {
       console.error("Failed to load tasks:", error)
@@ -269,7 +311,8 @@ export function Tasks() {
         toast.success("Task created successfully!", {
           description: "Your new task has been added to the list.",
         })
-        await loadTasks()
+        // Force refresh to get updated status (in case task is marked as overdue)
+        await loadTasks(true)
       } else {
         setError(response.error?.message || "Failed to create task")
         toast.error("Failed to create task", {
@@ -360,35 +403,6 @@ export function Tasks() {
     }
   }
 
-  const handleToggleComplete = async (task: TaskWithRelations) => {
-    try {
-      await taskService.updateTask(task.task_id, {
-        is_completed: !task.is_completed,
-      })
-      // Invalidate caches since task was updated
-      pageCache.clear(CACHE_KEYS.TASKS_LIST)
-      pageCache.clear(CACHE_KEYS.DASHBOARD_STATS)
-      pageCache.clear(CACHE_KEYS.ANALYTICS_DAY_OF_WEEK)
-      pageCache.clear(CACHE_KEYS.ANALYTICS_ON_TIME)
-      pageCache.clear(CACHE_KEYS.ANALYTICS_CATEGORY_TIME)
-      
-      toast.success(
-        task.is_completed ? "Task marked as incomplete" : "Task completed!",
-        {
-          description: task.is_completed 
-            ? "The task has been marked as incomplete." 
-            : "Great job! Keep up the momentum.",
-        }
-      )
-      await loadTasks()
-    } catch (error) {
-      console.error("Failed to update task:", error)
-      toast.error("Failed to update task", {
-        description: "Please try again.",
-      })
-    }
-  }
-
   const handleDeleteTask = async (taskId: string) => {
     try {
       await taskService.deleteTask(taskId)
@@ -399,62 +413,13 @@ export function Tasks() {
       toast.success("Task deleted", {
         description: "The task has been removed.",
       })
-      await loadTasks()
+      // Force refresh to get updated list immediately
+      await loadTasks(true)
     } catch (error) {
       console.error("Failed to delete task:", error)
       toast.error("Failed to delete task", {
         description: "Please try again.",
       })
-    }
-  }
-
-  // Helper function to check if task is overdue
-  const isTaskOverdue = (task: TaskWithRelations): boolean => {
-    if (task.is_completed) return false
-    
-    // Check if task has a due_date field (we'll need to add this to the TaskWithRelations type)
-    // For now, we'll check if there's a due_date in the task object
-    const taskAny = task as any
-    if (taskAny.due_date) {
-      return new Date() > new Date(taskAny.due_date)
-    }
-    
-    // Fallback: use created_at + 7 days if no due_date
-    const createdDate = new Date(task.created_at)
-    const defaultDueDate = new Date(createdDate.getTime() + 7 * 24 * 60 * 60 * 1000)
-    return new Date() > defaultDueDate
-  }
-
-  // Auto-update status and priority for overdue tasks
-  const checkAndUpdateOverdueTasks = async (tasks: TaskWithRelations[]) => {
-    const overdueTasks = tasks.filter(task => isTaskOverdue(task) && !task.is_completed)
-    
-    for (const task of overdueTasks) {
-      // Find "In Progress" status ID
-      const inProgressStatus = statuses.find(s => s.status_name.toLowerCase() === "in progress")
-      if (!inProgressStatus) continue
-      
-      // Check if task needs update
-      const needsStatusUpdate = task.status_id !== inProgressStatus.status_id
-      const needsPriorityUpdate = task.task_priority !== 5 // High priority = 5
-      
-      if (needsStatusUpdate || needsPriorityUpdate) {
-        try {
-          const updateData: { status_id?: number; task_priority?: number } = {}
-          
-          if (needsStatusUpdate) {
-            updateData.status_id = inProgressStatus.status_id
-          }
-          
-          if (needsPriorityUpdate) {
-            updateData.task_priority = 5 // High priority
-          }
-          
-          await taskService.updateTask(task.task_id, updateData)
-        } catch (error) {
-          console.error(`Failed to auto-update overdue task ${task.task_id}:`, error)
-        }
-      }
     }
   }
 
@@ -479,7 +444,8 @@ export function Tasks() {
       toast.success("Task set to In Progress", {
         description: "The task status has been updated.",
       })
-      await loadTasks()
+      // Force refresh to get updated status immediately
+      await loadTasks(true)
     } catch (error) {
       console.error("Failed to update task:", error)
       toast.error("Failed to update task", {
@@ -504,7 +470,8 @@ export function Tasks() {
       toast.success("Task completed!", {
         description: "Great job! Keep up the momentum.",
       })
-      await loadTasks()
+      // Force refresh to get updated status immediately
+      await loadTasks(true)
     } catch (error) {
       console.error("Failed to complete task:", error)
       toast.error("Failed to complete task", {
@@ -536,7 +503,8 @@ export function Tasks() {
       
       setEditingPriorityTask(null)
       setNewPriority(undefined)
-      await loadTasks()
+      // Force refresh to get updated status immediately
+      await loadTasks(true)
     } catch (error) {
       console.error("Failed to update priority:", error)
       toast.error("Failed to update priority", {
@@ -970,18 +938,7 @@ export function Tasks() {
                           {task.status ? getStatusBadge(task.status.status_name) : null}
                         </TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => handleToggleComplete(task)}
-                              className="flex items-center transition-all duration-200 hover:scale-110 active:scale-95"
-                              aria-label={task.is_completed ? "Mark as incomplete" : "Mark as complete"}
-                            >
-                              {task.is_completed ? (
-                                <CheckCircle2 className="w-5 h-5 text-green-500 transition-all duration-200" />
-                              ) : (
-                                <div className="w-5 h-5 border-2 border-muted-foreground rounded-full transition-all duration-200 group-hover:border-primary" />
-                              )}
-                            </button>
+                          <div>
                             <span
                               className={`transition-all duration-200 ${
                                 task.is_completed 
