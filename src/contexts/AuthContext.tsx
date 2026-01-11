@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import type { User, Session, AuthChangeEvent } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
+import { userService } from '../services'
 
 interface AuthContextType {
   user: User | null
@@ -37,7 +38,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const signOut = async () => {
-    await supabase.auth.signOut()
+    // Goes through API Gateway → User Service → Database
+    await userService.signOut()
   }
 
   return (

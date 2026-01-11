@@ -4,7 +4,7 @@ import { useNavigate, useLocation } from "react-router-dom"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar"
-import { IconDashboard, IconListDetails, IconChartBar, IconReport, IconSettings, IconHelp } from "@tabler/icons-react"
+import { IconDashboard, IconListDetails, IconChartBar, IconHelp } from "@tabler/icons-react"
 
 interface AppLayoutProps {
   children: ReactNode
@@ -57,23 +57,12 @@ export function AppLayout({ children, pageTitle }: AppLayoutProps) {
     ],
     navSecondary: [
       {
-        title: "Settings",
-        url: "#",
-        icon: IconSettings,
-      },
-      {
         title: "Get Help",
         url: "#",
         icon: IconHelp,
       },
     ],
-    documents: [
-      {
-        name: "Reports",
-        url: "#",
-        icon: IconReport,
-      },
-    ],
+    documents: [],
   }
 
   return (
