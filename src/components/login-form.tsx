@@ -10,6 +10,8 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { userService } from "@/services"
+import { supabase } from "@/lib/supabase"
+import { Separator } from "@/components/ui/separator"
 
 export function LoginForm({
   className,
@@ -19,9 +21,33 @@ export function LoginForm({
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
+  const [oauthLoading, setOauthLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const navigate = useNavigate()
+
+  const handleGoogleSignIn = async () => {
+    setOauthLoading(true)
+    setError(null)
+    setMessage(null)
+
+    try {
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/dashboard`,
+        },
+      })
+
+      if (oauthError) {
+        throw new Error(oauthError.message || 'Failed to sign in with Google')
+      }
+      // The redirect will happen automatically, so we don't need to navigate manually
+    } catch (err: any) {
+      setError(err.message || "Failed to sign in with Google")
+      setOauthLoading(false)
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -100,7 +126,7 @@ export function LoginForm({
             required
             value={email}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)}
-            disabled={loading}
+            disabled={loading || oauthLoading}
           />
         </Field>
         <Field>
@@ -113,12 +139,12 @@ export function LoginForm({
             required
             value={password}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
-            disabled={loading}
+            disabled={loading || oauthLoading}
             minLength={6}
           />
         </Field>
         <Field>
-          <Button type="submit" disabled={loading} className="w-full">
+          <Button type="submit" disabled={loading || oauthLoading} className="w-full">
             {loading
               ? isSignUp
                 ? "Creating account..."
@@ -126,6 +152,29 @@ export function LoginForm({
               : isSignUp
               ? "Sign Up"
               : "Login"}
+          </Button>
+        </Field>
+        <Field>
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <Separator />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-card px-2 text-muted-foreground">
+                Or continue with
+              </span>
+            </div>
+          </div>
+        </Field>
+        <Field>
+          <Button 
+            type="button" 
+            variant="outline" 
+            disabled={loading || oauthLoading} 
+            className="w-full"
+            onClick={handleGoogleSignIn}
+          >
+            {oauthLoading ? "Connecting..." : "Continue with Google"}
           </Button>
         </Field>
         <Field>
